@@ -5,6 +5,7 @@
 import { Calendar, Check } from "lucide-react-native";
 import React, { useState } from "react";
 import {
+    KeyboardAvoidingView,
     Linking,
     Platform,
     ScrollView,
@@ -13,11 +14,12 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, mapGame } from "../api";
 import { C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
 import { sendAppNotification } from "../storage";
-import { Game, RosterEntry, User } from "../types";
+import { Club, Game, RosterEntry, TeamGroup, User } from "../types";
 
 interface GuardianState {
   currentUser: User;
@@ -26,6 +28,8 @@ interface GuardianState {
   rosters: RosterEntry[];
   setRosters: React.Dispatch<React.SetStateAction<RosterEntry[]>>;
   users: User[];
+  teamGroups: TeamGroup[];
+  clubs: Club[];
   showToast: (msg: string) => void;
 }
 
@@ -37,6 +41,8 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
     rosters,
     setRosters,
     users,
+    teamGroups,
+    clubs,
     showToast,
   } = state;
   const { t } = useLanguage();
@@ -110,9 +116,20 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
     }
   };
 
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={{ flex: 1 }}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={s.scrollContent}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={s.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
+      >
         {/* Hero banner */}
         <View style={s.hero}>
           <Text style={s.heroTitle}>{t("guardianPortalTitle")}</Text>
@@ -227,10 +244,26 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
                       .map((vId) => users.find((u) => u.id === vId)?.name)
                       .join(", ")
                   : "None";
+                const homeGroup = teamGroups.find(
+                  (tg) => tg.id === game.homeGroupId,
+                );
+                const homeGroupClub = homeGroup?.clubId
+                  ? clubs.find((c) => c.id === homeGroup.clubId)
+                  : null;
+                const creatorCoach = users.find((u) => u.id === game.creatorId);
+                const creatorClub = creatorCoach?.defaultClubId
+                  ? clubs.find((c) => c.id === creatorCoach.defaultClubId)
+                  : null;
+                const displayClub = homeGroupClub ?? creatorClub;
                 return (
                   <View key={game.id} style={s.card}>
                     <View style={s.rowBetween}>
-                      <Text style={s.cardTitle}>{game.sport} Match</Text>
+                      <Text style={s.cardTitle}>
+                        {displayClub
+                          ? displayClub.name
+                          : (creatorCoach?.name ?? game.sport)}{" "}
+                        Match
+                      </Text>
                       <Text style={s.pill}>{game.status.toUpperCase()}</Text>
                     </View>
                     <Text style={s.metaText}>
@@ -291,7 +324,9 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
       </ScrollView>
 
       {/* Bottom nav */}
-      <View style={s.bottomNav}>
+      <View
+        style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
+      >
         <NavBtn
           icon={
             <Check
@@ -316,7 +351,7 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
           onPress={() => setTab("schedule")}
         />
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -411,7 +446,7 @@ const s = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: C.slate200,
+    borderColor: C.slate300,
     shadowColor: "#000",
     shadowOpacity: 0.04,
     shadowRadius: 4,
@@ -467,8 +502,7 @@ const s = StyleSheet.create({
     backgroundColor: C.white,
     borderTopWidth: 1,
     borderColor: C.slate200,
-    paddingVertical: 8,
-    paddingBottom: Platform.OS === "ios" ? 24 : 8,
+    paddingTop: 8,
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 8,

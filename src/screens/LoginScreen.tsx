@@ -2,9 +2,10 @@
  * 登录 / 注册页面 (Login & Register Screen)
  * 对应 App.jsx 的 LoginScreen 组件
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     ActivityIndicator,
+    Keyboard,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
@@ -15,7 +16,7 @@ import {
     View,
 } from "react-native";
 import { API_BASE_URL, mapUser } from "../api";
-import { C, DatePickerField, LangSwitcher } from "../components/shared";
+import { C, LangSwitcher } from "../components/shared";
 import { useLanguage } from "../i18n";
 import { User } from "../types";
 
@@ -41,6 +42,13 @@ function calcAge(dob: string): number | null {
 
 const UNDERAGE_LIMIT = 16;
 
+function normalizeEmailCode(v: string): string {
+  return v
+    .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 65248))
+    .replace(/\s+/g, "")
+    .trim();
+}
+
 export default function LoginScreen({ onLogin }: Props) {
   const { t } = useLanguage();
   const [tab, setTab] = useState<"login" | "register">("login");
@@ -52,16 +60,79 @@ export default function LoginScreen({ onLogin }: Props) {
   const [showPwd, setShowPwd] = useState(false);
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  // Pending email verification during login
+  const [pendingVerifyEmail, setPendingVerifyEmail] = useState<string | null>(
+    null,
+  );
+  const [loginVerifyCode, setLoginVerifyCode] = useState("");
+  const [loginVerifySending, setLoginVerifySending] = useState(false);
+  const [loginVerifyCodeSent, setLoginVerifyCodeSent] = useState(false);
+  const [loginVerifyLoading, setLoginVerifyLoading] = useState(false);
+  const [loginVerifyError, setLoginVerifyError] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetNewPwd, setResetNewPwd] = useState("");
+  const [resetConfirmPwd, setResetConfirmPwd] = useState("");
+  const [resetShowPwd, setResetShowPwd] = useState(false);
+  const [resetSendingCode, setResetSendingCode] = useState(false);
+  const [resetCodeSent, setResetCodeSent] = useState(false);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
 
   // Register
   const [regName, setRegName] = useState("");
   const [regEmail, setRegEmail] = useState("");
   const [regPassword, setRegPassword] = useState("");
+  const [regConfirmPassword, setRegConfirmPassword] = useState("");
   const [showRegPwd, setShowRegPwd] = useState(false);
   const [regCode, setRegCode] = useState("");
   const [regDob, setRegDob] = useState("");
+  const [dobYear, setDobYear] = useState("");
+  const [dobMonth, setDobMonth] = useState("");
+  const [dobDay, setDobDay] = useState("");
+
+  // Assemble ISO date from parts and update regDob
+  const updateDob = (y: string, m: string, d: string) => {
+    const yNum = parseInt(y, 10);
+    const mNum = parseInt(m, 10);
+    const dNum = parseInt(d, 10);
+    if (y.length === 4 && mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+      const iso = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+      setRegDob(iso);
+    } else {
+      setRegDob("");
+    }
+  };
   const [regError, setRegError] = useState("");
   const [regLoading, setRegLoading] = useState(false);
+  const [emailTakenError, setEmailTakenError] = useState("");
+
+  // Email verification code
+  const [emailCode, setEmailCode] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [codeError, setCodeError] = useState("");
+
+  const checkEmailTaken = async (emailVal: string) => {
+    if (!emailVal.trim() || !emailVal.includes("@")) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/check_email?email=${encodeURIComponent(emailVal.trim())}`,
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.taken) {
+          setEmailTakenError(t("errEmailTaken"));
+        } else {
+          setEmailTakenError("");
+        }
+      }
+    } catch {
+      // silently ignore network errors for this check
+    }
+  };
 
   // Guardian (for underage players)
   const [guardianName, setGuardianName] = useState("");
@@ -69,8 +140,27 @@ export default function LoginScreen({ onLogin }: Props) {
   const [guardianPassword, setGuardianPassword] = useState("");
   const [showGuardianPwd, setShowGuardianPwd] = useState(false);
 
+  // Extra reg fields
+  const [regPhone, setRegPhone] = useState("");
+  const [regClubName, setRegClubName] = useState("");
+
   const playerAge = regRole === "player" ? calcAge(regDob) : null;
   const needsGuardian = playerAge !== null && playerAge < UNDERAGE_LIMIT;
+  const [keyboardInset, setKeyboardInset] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      setKeyboardInset(Math.max(0, e.endCoordinates?.height ?? 0));
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardInset(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -87,6 +177,13 @@ export default function LoginScreen({ onLogin }: Props) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        if (data.detail === "EMAIL_NOT_VERIFIED") {
+          setPendingVerifyEmail(email.trim());
+          setLoginVerifyCode("");
+          setLoginVerifyCodeSent(false);
+          setLoginVerifyError("");
+          return;
+        }
         setLoginError(data.detail || t("errInvalidCredentials"));
         return;
       }
@@ -96,6 +193,84 @@ export default function LoginScreen({ onLogin }: Props) {
       setLoginError(t("errCannotConnect"));
     } finally {
       setLoginLoading(false);
+    }
+  };
+
+  const handleLoginSendCode = async () => {
+    setLoginVerifyError("");
+    setLoginVerifySending(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/send_login_verify_code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: pendingVerifyEmail }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setLoginVerifyError(data.detail || t("errCannotConnect"));
+        return;
+      }
+      setLoginVerifyCodeSent(true);
+    } catch {
+      setLoginVerifyError(t("errCannotConnect"));
+    } finally {
+      setLoginVerifySending(false);
+    }
+  };
+
+  const handleVerifyAndLogin = async () => {
+    if (!loginVerifyCode.trim()) {
+      setLoginVerifyError(t("errCodeRequired"));
+      return;
+    }
+    setLoginVerifyLoading(true);
+    setLoginVerifyError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/verify_email_code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: pendingVerifyEmail,
+          code: normalizeEmailCode(loginVerifyCode),
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setLoginVerifyError(data.detail || t("errInvalidCredentials"));
+        return;
+      }
+      const userData = await res.json();
+      onLogin(mapUser(userData));
+    } catch {
+      setLoginVerifyError(t("errCannotConnect"));
+    } finally {
+      setLoginVerifyLoading(false);
+    }
+  };
+
+  const sendEmailCode = async () => {
+    if (!regEmail.trim() || !regEmail.includes("@")) {
+      setCodeError(t("labelEmail"));
+      return;
+    }
+    setSendingCode(true);
+    setCodeError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/send_email_code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: regEmail.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCodeError(data.detail || t("errRegFailed"));
+        return;
+      }
+      setCodeSent(true);
+    } catch {
+      setCodeError(t("errCannotConnect"));
+    } finally {
+      setSendingCode(false);
     }
   };
 
@@ -115,6 +290,10 @@ export default function LoginScreen({ onLogin }: Props) {
     }
     if (regPassword.length < 6) {
       setRegError(t("errPwdTooShort"));
+      return;
+    }
+    if (regPassword !== regConfirmPassword) {
+      setRegError(t("errPwdMismatch"));
       return;
     }
     if (needsGuardian) {
@@ -137,6 +316,10 @@ export default function LoginScreen({ onLogin }: Props) {
         return;
       }
     }
+    if (!emailCode.trim()) {
+      setRegError(t("errCodeRequired"));
+      return;
+    }
     setRegError("");
     setRegLoading(true);
     const endpoint =
@@ -150,14 +333,19 @@ export default function LoginScreen({ onLogin }: Props) {
             email: regEmail.trim(),
             password: regPassword,
             coachInviteCode: regCode.trim(),
+            emailCode: normalizeEmailCode(emailCode),
             dob: regDob || null,
+            phone: regPhone.trim() || null,
+            clubName: regClubName.trim() || null,
           }
         : {
             name: regName.trim(),
             email: regEmail.trim(),
             password: regPassword,
             inviteCode: regCode.trim(),
+            emailCode: normalizeEmailCode(emailCode),
             dob: regDob || null,
+            phone: regPhone.trim() || null,
             ...(needsGuardian
               ? {
                   guardianName: guardianName.trim(),
@@ -186,21 +374,104 @@ export default function LoginScreen({ onLogin }: Props) {
     }
   };
 
+  const sendResetCode = async () => {
+    if (!resetEmail.trim() || !resetEmail.includes("@")) {
+      setResetError(t("labelEmail"));
+      return;
+    }
+    setResetError("");
+    setResetSuccess("");
+    setResetSendingCode(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/send_password_reset_code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setResetError(data.detail || t("errCannotConnect"));
+        return;
+      }
+      setResetCodeSent(true);
+      setResetSuccess(t("resetPwdCodeSent"));
+    } catch {
+      setResetError(t("errCannotConnect"));
+    } finally {
+      setResetSendingCode(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (
+      !resetEmail.trim() ||
+      !normalizeEmailCode(resetCode) ||
+      !resetNewPwd ||
+      !resetConfirmPwd
+    ) {
+      setResetError(t("errFillAll"));
+      return;
+    }
+    if (INVALID_PWD.test(resetNewPwd)) {
+      setResetError(t("errPwdInvalid"));
+      return;
+    }
+    if (resetNewPwd.length < 6) {
+      setResetError(t("errPwdTooShort"));
+      return;
+    }
+    if (resetNewPwd !== resetConfirmPwd) {
+      setResetError(t("errPwdMismatch"));
+      return;
+    }
+    setResetError("");
+    setResetSuccess("");
+    setResetSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/reset_password_by_email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: resetEmail.trim(),
+          emailCode: normalizeEmailCode(resetCode),
+          newPassword: resetNewPwd,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setResetError(data.detail || t("errCannotConnect"));
+        return;
+      }
+      setResetSuccess(t("resetPwdSuccess"));
+      setResetCode("");
+      setResetNewPwd("");
+      setResetConfirmPwd("");
+    } catch {
+      setResetError(t("errCannotConnect"));
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
+      {/* Language switcher — fixed top-right, above everything */}
+      <View style={{ position: "absolute", top: 52, right: 16, zIndex: 10 }}>
+        <LangSwitcher />
+      </View>
+
       <ScrollView
         style={styles.bg}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          { paddingBottom: 60 + keyboardInset },
+        ]}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
       >
-        {/* Language switcher */}
-        <View style={{ alignItems: "flex-end", marginBottom: 8 }}>
-          <LangSwitcher />
-        </View>
-
         {/* Logo */}
         <View style={styles.logoBox}>
           <Text style={styles.logoIcon}>🛡</Text>
@@ -291,6 +562,214 @@ export default function LoginScreen({ onLogin }: Props) {
               )}
             </TouchableOpacity>
 
+            <TouchableOpacity
+              onPress={() => {
+                setResetOpen((v) => !v);
+                setResetError("");
+                setResetSuccess("");
+              }}
+            >
+              <Text
+                style={{
+                  marginTop: 10,
+                  color: C.blue,
+                  fontSize: 13,
+                  textAlign: "right",
+                }}
+              >
+                {t("forgotPwdLink")}
+              </Text>
+            </TouchableOpacity>
+
+            {resetOpen && (
+              <View
+                style={{
+                  marginTop: 12,
+                  padding: 14,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: C.slate200,
+                  backgroundColor: C.white,
+                  gap: 10,
+                }}
+              >
+                <Text style={{ fontSize: 14, fontWeight: "700", color: C.slate700 }}>
+                  {t("resetPwdTitle")}
+                </Text>
+                <Text style={{ fontSize: 12, color: C.slate500 }}>
+                  {t("resetPwdHint")}
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={resetEmail}
+                  onChangeText={setResetEmail}
+                  placeholder="your@email.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.sendCodeBtn,
+                    (resetSendingCode || resetCodeSent) && styles.disabledBtn,
+                  ]}
+                  onPress={sendResetCode}
+                  disabled={resetSendingCode || resetCodeSent}
+                >
+                  <Text style={styles.sendCodeBtnText}>
+                    {resetSendingCode
+                      ? t("verifyEmailResending")
+                      : resetCodeSent
+                        ? "✓ " + t("btnSendCode")
+                        : t("btnSendCode")}
+                  </Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.input}
+                  value={resetCode}
+                  onChangeText={(v) => setResetCode(normalizeEmailCode(v))}
+                  placeholder="000000"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                />
+                <View style={styles.pwdWrap}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    value={resetNewPwd}
+                    onChangeText={setResetNewPwd}
+                    placeholder={t("profileNewPwd")}
+                    secureTextEntry={!resetShowPwd}
+                  />
+                  <TouchableOpacity
+                    style={styles.pwdToggle}
+                    onPress={() => setResetShowPwd((v) => !v)}
+                  >
+                    <Text style={styles.pwdToggleText}>
+                      {resetShowPwd ? t("pwdHide") : t("pwdShow")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.input}
+                  value={resetConfirmPwd}
+                  onChangeText={setResetConfirmPwd}
+                  placeholder={t("labelConfirmPassword")}
+                  secureTextEntry
+                />
+                {!!resetError && <Text style={styles.errorText}>⚠ {resetError}</Text>}
+                {!!resetSuccess && (
+                  <Text style={[styles.hint, { color: C.green, fontSize: 12 }]}>
+                    {resetSuccess}
+                  </Text>
+                )}
+                <TouchableOpacity
+                  style={[styles.primaryBtn, resetSubmitting && styles.disabledBtn]}
+                  onPress={handleResetPassword}
+                  disabled={resetSubmitting}
+                >
+                  {resetSubmitting ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>{t("resetPwdSubmit")}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Pending email verification panel */}
+            {!!pendingVerifyEmail && (
+              <View
+                style={{
+                  marginTop: 16,
+                  padding: 16,
+                  backgroundColor: "#fefce8",
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: "#fde68a",
+                  gap: 10,
+                }}
+              >
+                <Text
+                  style={{ fontWeight: "700", color: "#92400e", fontSize: 14 }}
+                >
+                  📧 {t("verifyEmailTitle")}
+                </Text>
+                <Text style={{ fontSize: 13, color: "#78350f" }}>
+                  {t("verifyEmailBody").replace("{email}", pendingVerifyEmail)}
+                </Text>
+                <TouchableOpacity
+                  style={[
+                    styles.sendCodeBtn,
+                    (loginVerifySending || loginVerifyCodeSent) &&
+                      styles.disabledBtn,
+                  ]}
+                  onPress={handleLoginSendCode}
+                  disabled={loginVerifySending || loginVerifyCodeSent}
+                >
+                  <Text style={styles.sendCodeBtnText}>
+                    {loginVerifySending
+                      ? t("verifyEmailResending")
+                      : loginVerifyCodeSent
+                        ? "✓ " + t("btnSendCode")
+                        : t("btnSendCode")}
+                  </Text>
+                </TouchableOpacity>
+                {loginVerifyCodeSent && (
+                  <Text style={{ fontSize: 12, color: "#16a34a" }}>
+                    {t("codeSentHint")}
+                  </Text>
+                )}
+                <Text style={[styles.label, { marginTop: 4 }]}>
+                  {t("labelEmailCode")} *
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={loginVerifyCode}
+                  onChangeText={(v) => setLoginVerifyCode(normalizeEmailCode(v))}
+                  placeholder="000000"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                />
+                {!!loginVerifyError && (
+                  <Text style={styles.errorText}>⚠ {loginVerifyError}</Text>
+                )}
+                <TouchableOpacity
+                  style={[
+                    styles.primaryBtn,
+                    loginVerifyLoading && styles.disabledBtn,
+                  ]}
+                  onPress={handleVerifyAndLogin}
+                  disabled={loginVerifyLoading}
+                >
+                  {loginVerifyLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>
+                      {t("btnVerifyAndLogin")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    setPendingVerifyEmail(null);
+                    setLoginVerifyCode("");
+                    setLoginVerifyCodeSent(false);
+                    setLoginVerifyError("");
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      color: C.blue,
+                      textAlign: "center",
+                      marginTop: 4,
+                    }}
+                  >
+                    {t("verifyEmailBackToLogin")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Demo accounts hint */}
             <View style={styles.demoBox}>
               <Text style={styles.demoTitle}>{t("demoTitle")}</Text>
@@ -327,6 +806,9 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianName("");
                   setGuardianEmail("");
                   setGuardianPassword("");
+                  setEmailCode("");
+                  setCodeSent(false);
+                  setCodeError("");
                 }}
               >
                 <Text
@@ -350,6 +832,9 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianName("");
                   setGuardianEmail("");
                   setGuardianPassword("");
+                  setEmailCode("");
+                  setCodeSent(false);
+                  setCodeError("");
                 }}
               >
                 <Text
@@ -363,26 +848,69 @@ export default function LoginScreen({ onLogin }: Props) {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>{t("labelFullName")} *</Text>
-            <TextInput
-              style={styles.input}
-              value={regName}
-              onChangeText={setRegName}
-              placeholder="Your Name"
-              autoComplete="name"
-            />
-
-            <Text style={[styles.label, { marginTop: 12 }]}>
-              {t("labelEmail")} *
+            <Text style={styles.label}>
+              {t("labelEmail")}{" "}
+              <Text style={{ fontSize: 11, color: C.slate400 }}>
+                {t("registerEmailNote")}
+              </Text>{" "}
+              *
             </Text>
             <TextInput
-              style={styles.input}
+              style={[
+                styles.input,
+                !!emailTakenError && { borderColor: "#ef4444", borderWidth: 1 },
+              ]}
               value={regEmail}
-              onChangeText={setRegEmail}
+              onChangeText={(v) => {
+                setRegEmail(v);
+                setEmailTakenError("");
+                setCodeSent(false);
+                setCodeError("");
+              }}
+              onBlur={() => checkEmailTaken(regEmail)}
               placeholder="your@email.com"
               keyboardType="email-address"
               autoCapitalize="none"
             />
+            {!!emailTakenError && (
+              <Text style={[styles.errorText, { marginTop: 2 }]}>
+                ⚠ {emailTakenError}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[
+                styles.sendCodeBtn,
+                (sendingCode || codeSent) && styles.disabledBtn,
+              ]}
+              onPress={sendEmailCode}
+              disabled={sendingCode || codeSent}
+            >
+              <Text style={styles.sendCodeBtnText}>
+                {sendingCode
+                  ? t("verifyEmailResending")
+                  : codeSent
+                    ? "✓ " + t("btnSendCode")
+                    : t("btnSendCode")}
+              </Text>
+            </TouchableOpacity>
+            {codeSent && (
+              <Text style={[styles.hint, { color: C.green }]}>
+                {t("codeSentHint")}
+              </Text>
+            )}
+            {!!codeError && <Text style={styles.errorText}>⚠ {codeError}</Text>}
+            <Text style={[styles.label, { marginTop: 12 }]}>
+              {t("labelEmailCode")} *
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={emailCode}
+              onChangeText={(v) => setEmailCode(normalizeEmailCode(v))}
+              placeholder="000000"
+              keyboardType="number-pad"
+              maxLength={6}
+            />
+            <Text style={styles.hint}>{t("hintEmailCode")}</Text>
 
             <Text style={[styles.label, { marginTop: 12 }]}>
               {t("labelPassword")} *
@@ -406,13 +934,72 @@ export default function LoginScreen({ onLogin }: Props) {
             </View>
             <Text style={styles.hint}>{t("pwdHint")}</Text>
 
-            <DatePickerField
-              label={`${t("labelDob")} *`}
-              value={regDob}
-              onChange={setRegDob}
-              mode="date"
-              inputStyle={styles.input}
+            <Text style={[styles.label, { marginTop: 12 }]}>
+              {t("labelConfirmPassword")} *
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={regConfirmPassword}
+              onChangeText={setRegConfirmPassword}
+              placeholder="••••••••"
+              secureTextEntry
             />
+
+            <Text style={[styles.label, { marginTop: 4 }]}>
+              {t("labelFullName")} *
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={regName}
+              onChangeText={setRegName}
+              placeholder={t("phName")}
+              autoComplete="name"
+            />
+
+            <Text style={[styles.label, { marginTop: 12 }]}>
+              {t("labelDob")} *
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
+              <TextInput
+                style={[styles.input, { flex: 2 }]}
+                value={dobYear}
+                onChangeText={(v) => {
+                  const s = v.replace(/\D/g, "").slice(0, 4);
+                  setDobYear(s);
+                  updateDob(s, dobMonth, dobDay);
+                }}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder={t("dobYearPlaceholder") || "YYYY"}
+                placeholderTextColor={C.slate400}
+              />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                value={dobMonth}
+                onChangeText={(v) => {
+                  const s = v.replace(/\D/g, "").slice(0, 2);
+                  setDobMonth(s);
+                  updateDob(dobYear, s, dobDay);
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                placeholder={t("dobMonthPlaceholder") || "MM"}
+                placeholderTextColor={C.slate400}
+              />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                value={dobDay}
+                onChangeText={(v) => {
+                  const s = v.replace(/\D/g, "").slice(0, 2);
+                  setDobDay(s);
+                  updateDob(dobYear, dobMonth, s);
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                placeholder={t("dobDayPlaceholder") || "DD"}
+                placeholderTextColor={C.slate400}
+              />
+            </View>
             {playerAge !== null && (
               <Text
                 style={[
@@ -446,7 +1033,7 @@ export default function LoginScreen({ onLogin }: Props) {
                   style={styles.input}
                   value={guardianName}
                   onChangeText={setGuardianName}
-                  placeholder="Guardian Name"
+                  placeholder={t("phName")}
                   autoComplete="name"
                 />
 
@@ -484,6 +1071,31 @@ export default function LoginScreen({ onLogin }: Props) {
                 </View>
                 <Text style={styles.hint}>{t("guardianPwdHint")}</Text>
               </View>
+            )}
+
+            <Text style={[styles.label, { marginTop: 12 }]}>
+              {t("labelPhone")}
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={regPhone}
+              onChangeText={setRegPhone}
+              placeholder={t("phPhone")}
+              keyboardType="phone-pad"
+            />
+
+            {regRole === "coach" && (
+              <>
+                <Text style={[styles.label, { marginTop: 12 }]}>
+                  {t("labelDefaultClub")}
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={regClubName}
+                  onChangeText={setRegClubName}
+                  placeholder={t("phClubExample")}
+                />
+              </>
             )}
 
             <Text style={[styles.label, { marginTop: 12 }]}>
@@ -631,6 +1243,15 @@ const styles = StyleSheet.create({
   },
   disabledBtn: { opacity: 0.6 },
   primaryBtnText: { color: C.white, fontWeight: "700", fontSize: 15 },
+  sendCodeBtn: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: C.blue,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  sendCodeBtnText: { color: C.white, fontWeight: "600", fontSize: 13 },
   demoBox: {
     marginTop: 20,
     backgroundColor: C.slate100,

@@ -2,9 +2,10 @@
  * 球员仪表盘 (Player Dashboard)
  * 对应 App.jsx 的 PlayerView
  */
-import { Calendar, Mail } from "lucide-react-native";
+import { Calendar, Mail, Trophy } from "lucide-react-native";
 import React, { useState } from "react";
 import {
+    KeyboardAvoidingView,
     Linking,
     Platform,
     ScrollView,
@@ -14,12 +15,14 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { apiFetch, calculateAge } from "../api";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { apiFetch, calculateAge, mapTeamGroup } from "../api";
 import { AppModal, C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
 import { sendAppNotification } from "../storage";
 import {
     AdminSettings,
+    Club,
     Game,
     ModalConfig,
     RosterEntry,
@@ -35,6 +38,8 @@ interface PlayerState {
   adminSettings: AdminSettings;
   users: User[];
   teamGroups: TeamGroup[];
+  setTeamGroups: React.Dispatch<React.SetStateAction<TeamGroup[]>>;
+  clubs: Club[];
   showToast: (msg: string) => void;
 }
 
@@ -47,12 +52,18 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     adminSettings,
     users,
     teamGroups,
+    setTeamGroups,
+    clubs,
     showToast,
   } = state;
   const { t } = useLanguage();
 
-  const [tab, setTab] = useState<"invites" | "my_games">("invites");
+  const [tab, setTab] = useState<"invites" | "my_games" | "confirmed">(
+    "invites",
+  );
   const [modal, setModal] = useState<ModalConfig | null>(null);
+  const [joinInviteCode, setJoinInviteCode] = useState("");
+  const [joiningTeam, setJoiningTeam] = useState(false);
 
   const myRosters = rosters.filter((r) => r.playerId === currentUser.id);
   const invites = myRosters.filter((r) => r.status === "invited");
@@ -65,9 +76,44 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
 
   const age = calculateAge(currentUser.dob);
 
+  const joinedTeams = teamGroups.filter((tg) =>
+    tg.playerIds.includes(currentUser.id),
+  );
+
+  const handleJoinTeamByInvite = async () => {
+    const code = joinInviteCode.trim().toUpperCase();
+    if (!code) {
+      showToast(t("joinTeamCodeRequired"));
+      return;
+    }
+    setJoiningTeam(true);
+    try {
+      const data = await apiFetch("/team_groups/join_by_invite", {
+        method: "POST",
+        body: { playerId: currentUser.id, inviteCode: code },
+      });
+      const group = mapTeamGroup(data);
+      setTeamGroups((prev) => {
+        const idx = prev.findIndex((g) => g.id === group.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = group;
+          return next;
+        }
+        return [...prev, group];
+      });
+      setJoinInviteCode("");
+      showToast(t("joinedTeamSuccess").replace("{team}", group.name));
+    } catch (err: any) {
+      showToast("Failed: " + err.message);
+    } finally {
+      setJoiningTeam(false);
+    }
+  };
+
   const handleAcceptInvite = async (entry: RosterEntry) => {
     const newStatus =
-      age < adminSettings.underageLimit ? "pending_guardian" : "pending_coach";
+      age < adminSettings.underageLimit ? "pending_guardian" : "approved";
     try {
       await apiFetch(`/rosters/${entry.id}/status`, {
         method: "PUT",
@@ -160,9 +206,20 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     setModal({ title: t("withdrawTitle"), content: <WithdrawContent /> });
   };
 
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={{ flex: 1 }}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={s.scrollContent}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={s.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
+      >
         {/* Profile banner */}
         <View style={s.profileBanner}>
           <View>
@@ -178,6 +235,36 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           )}
         </View>
 
+        <View style={s.joinTeamBox}>
+          <Text style={s.joinTeamTitle}>{t("joinTeamTitle")}</Text>
+          <Text style={s.joinTeamHint}>{t("joinTeamHint")}</Text>
+          <View style={[s.searchRow, { marginTop: 8, marginBottom: 8 }]}>
+            <TextInput
+              style={s.searchInput}
+              value={joinInviteCode}
+              onChangeText={setJoinInviteCode}
+              placeholder={t("joinTeamCodePlaceholder")}
+              placeholderTextColor={C.slate400}
+              autoCapitalize="characters"
+            />
+          </View>
+          <TouchableOpacity
+            style={[s.btn, joiningTeam && s.btnDisabled]}
+            onPress={handleJoinTeamByInvite}
+            disabled={joiningTeam}
+          >
+            <Text style={s.btnText}>
+              {joiningTeam ? t("loading") : t("joinTeamBtn")}
+            </Text>
+          </TouchableOpacity>
+          <Text style={s.joinedTeamsText}>
+            {t("joinedTeamsCount").replace(
+              "{count}",
+              String(joinedTeams.length),
+            )}
+          </Text>
+        </View>
+
         {/* ===== INVITES TAB ===== */}
         {tab === "invites" && (
           <View>
@@ -190,10 +277,26 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
             {invites.map((inv) => {
               const game = games.find((g) => g.id === inv.gameId);
               if (!game) return null;
+              const homeGroup = teamGroups.find(
+                (tg) => tg.id === game.homeGroupId,
+              );
+              const homeGroupClub = homeGroup?.clubId
+                ? clubs.find((c) => c.id === homeGroup.clubId)
+                : null;
+              const creatorCoach = users.find((u) => u.id === game.creatorId);
+              const creatorClub = creatorCoach?.defaultClubId
+                ? clubs.find((c) => c.id === creatorCoach.defaultClubId)
+                : null;
+              const displayClub = homeGroupClub ?? creatorClub;
               return (
                 <View key={inv.id} style={s.inviteCard}>
                   <View style={s.inviteStripe} />
-                  <Text style={s.cardTitle}>{game.sport} Match</Text>
+                  <Text style={s.cardTitle}>
+                    {displayClub
+                      ? displayClub.name
+                      : (creatorCoach?.name ?? game.sport)}{" "}
+                    Match
+                  </Text>
                   <Text style={s.metaText}>
                     📅 {new Date(game.time).toLocaleString()}
                   </Text>
@@ -248,6 +351,17 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
             {activeGames.map((ag) => {
               const game = games.find((g) => g.id === ag.gameId);
               if (!game) return null;
+              const homeGroup = teamGroups.find(
+                (tg) => tg.id === game.homeGroupId,
+              );
+              const homeGroupClub = homeGroup?.clubId
+                ? clubs.find((c) => c.id === homeGroup.clubId)
+                : null;
+              const creatorCoach = users.find((u) => u.id === game.creatorId);
+              const creatorClub = creatorCoach?.defaultClubId
+                ? clubs.find((c) => c.id === creatorCoach.defaultClubId)
+                : null;
+              const displayClub = homeGroupClub ?? creatorClub;
               let badge: React.ReactNode;
               if (ag.status === "pending_guardian")
                 badge = (
@@ -285,7 +399,12 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
               return (
                 <View key={ag.id} style={s.card}>
                   <View style={s.rowBetween}>
-                    <Text style={s.cardTitle}>{game.sport} Match</Text>
+                    <Text style={s.cardTitle}>
+                      {displayClub
+                        ? displayClub.name
+                        : (creatorCoach?.name ?? game.sport)}{" "}
+                      Match
+                    </Text>
                     {badge}
                   </View>
                   <Text style={s.metaText}>
@@ -343,10 +462,96 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
             })}
           </View>
         )}
+
+        {/* ===== CONFIRMED TAB ===== */}
+        {tab === "confirmed" && (
+          <View>
+            <Text style={s.sectionTitle}>{t("confirmedGamesLabel")}</Text>
+            {myRosters.filter((r) => {
+              const g = games.find((gm) => gm.id === r.gameId);
+              return r.status === "approved" && g?.status === "locked";
+            }).length === 0 && (
+              <View style={s.emptyBox}>
+                <Text style={s.emptyText}>{t("noConfirmedGames")}</Text>
+              </View>
+            )}
+            {myRosters
+              .filter((r) => {
+                const g = games.find((gm) => gm.id === r.gameId);
+                return r.status === "approved" && g?.status === "locked";
+              })
+              .map((r) => {
+                const game = games.find((g) => g.id === r.gameId);
+                if (!game) return null;
+                const homeCoach = users.find((u) => u.id === game.creatorId);
+                const awayCoach = game.opposingTeamId
+                  ? users.find((u) => u.id === game.opposingTeamId)
+                  : null;
+                return (
+                  <View
+                    key={r.id}
+                    style={[
+                      s.card,
+                      { borderLeftWidth: 4, borderLeftColor: C.green },
+                    ]}
+                  >
+                    <Text style={s.cardTitle}>
+                      {game.sport} — {game.ageGroup}
+                    </Text>
+                    <Text style={s.metaText}>
+                      📅{" "}
+                      {new Date(game.time).toLocaleString("en-GB", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() =>
+                        Linking.openURL(
+                          `https://maps.google.com/?q=${encodeURIComponent(game.location)}`,
+                        )
+                      }
+                    >
+                      <Text style={[s.metaText, { color: "#2563eb" }]}>
+                        📍 {game.location}
+                      </Text>
+                    </TouchableOpacity>
+                    <View
+                      style={{ flexDirection: "row", gap: 8, marginTop: 6 }}
+                    >
+                      <Text style={[s.metaText, { fontWeight: "600" }]}>
+                        🏠 {homeCoach?.name ?? "—"}
+                      </Text>
+                      <Text style={s.metaText}>vs</Text>
+                      <Text style={[s.metaText, { fontWeight: "600" }]}>
+                        ✈️ {awayCoach?.name ?? "—"}
+                      </Text>
+                    </View>
+                    {!!game.contactPhone && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          Linking.openURL(`tel:${game.contactPhone!}`)
+                        }
+                      >
+                        <Text style={[s.metaText, { color: "#16a34a" }]}>
+                          📞 {game.contactPhone}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })}
+          </View>
+        )}
       </ScrollView>
 
       {/* Bottom nav */}
-      <View style={s.bottomNav}>
+      <View
+        style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
+      >
         <NavBtn
           icon={
             <Mail size={22} color={tab === "invites" ? C.blue : C.slate400} />
@@ -367,15 +572,66 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           active={tab === "my_games"}
           onPress={() => setTab("my_games")}
         />
+        <NavBtn
+          icon={
+            <Trophy
+              size={22}
+              color={tab === "confirmed" ? C.blue : C.slate400}
+            />
+          }
+          label={t("confirmedGamesLabel")}
+          active={tab === "confirmed"}
+          onPress={() => setTab("confirmed")}
+        />
       </View>
 
       <AppModal modal={modal} onClose={() => setModal(null)} />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 100 },
+  joinTeamBox: {
+    backgroundColor: C.white,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.slate200,
+    padding: 12,
+    marginBottom: 12,
+  },
+  joinTeamTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.slate800,
+  },
+  joinTeamHint: {
+    fontSize: 12,
+    color: C.slate500,
+    marginTop: 4,
+  },
+  joinedTeamsText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: C.slate600,
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: C.slate200,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: C.slate800,
+    padding: 0,
+  },
   profileBanner: {
     backgroundColor: C.slate100,
     borderRadius: 14,
@@ -416,7 +672,7 @@ const s = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: C.slate200,
+    borderColor: C.slate300,
     shadowColor: "#000",
     shadowOpacity: 0.04,
     shadowRadius: 4,
@@ -428,7 +684,7 @@ const s = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: C.slate200,
+    borderColor: C.slate300,
     overflow: "hidden",
     shadowColor: "#000",
     shadowOpacity: 0.05,
@@ -483,6 +739,7 @@ const s = StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
+  btnDisabled: { backgroundColor: C.slate300, shadowOpacity: 0, elevation: 0 },
   btnText: { color: C.white, fontWeight: "700", fontSize: 14 },
   textarea: {
     borderWidth: 1,
@@ -508,8 +765,7 @@ const s = StyleSheet.create({
     backgroundColor: C.white,
     borderTopWidth: 1,
     borderColor: C.slate200,
-    paddingVertical: 8,
-    paddingBottom: Platform.OS === "ios" ? 24 : 8,
+    paddingTop: 8,
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 8,

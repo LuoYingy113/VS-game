@@ -1,1 +1,31 @@
+source ~/.zshrc && nvm use 22
+
+# Expo Go (recommended first)
+npx expo start --go --lan --clear
+
+# Dev Client (only if your app was built with dev client)
+npx expo start --dev-client --lan --clear
+
+# Tunnel fallback when LAN cannot connect
+CI=1 npx expo start --go --tunnel --clear
+
+# Tunnel without login prompt (skip account check + disable interactive prompt)
+EXPO_OFFLINE=1 CI=1 npx expo start --go --tunnel --clear
+
+# Switch mode in running Expo terminal
+# press s -> Expo Go
+# press d -> Development build
+
+# Legacy quick starts
 npx expo start
+npx expo start --tunnel
+nvm use 22 && EXPO_OFFLINE=1 npx expo start --tunnel --clear --go
+nvm use 22 && npx expo start --lan --clear --go
+eas build --platform ios
+eas submit -p ios
+eas build --platform android --profile preview
+npx tsc --noEmit 2>&1 | grep "CoachScreen"
+source ~/.zshrc && nvm use 22 && npx expo start --tunnel --clear --go
+npx expo start --lan --clear --go
+
+

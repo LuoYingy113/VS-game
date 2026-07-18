@@ -4,7 +4,7 @@
 
 export interface User {
   id: string;
-  role: 'coach' | 'player' | 'guardian' | 'admin';
+  role: "coach" | "player" | "guardian" | "admin";
   name: string;
   email: string;
   phone: string | null;
@@ -12,7 +12,9 @@ export interface User {
   guardianId: string | null;
   bio: string | null;
   sport: string | null;
-  status: 'active' | 'inactive';
+  status: "active" | "inactive";
+  defaultLocation: string | null;
+  defaultClubId: string | null;
 }
 
 export interface Game {
@@ -22,12 +24,29 @@ export interface Game {
   time: string;
   location: string;
   ageGroup: string;
+  gender: "male" | "female" | "mixed" | null;
   deadline: string;
   description: string;
   contactPhone: string | null;
-  status: 'open' | 'locked' | 'cancelled';
+  status: "open" | "locked" | "cancelled";
   opposingTeamId: string | null;
+  homeGroupId: string | null;
+  opposingGroupId: string | null;
   volunteers: string[];
+  isPrivate: boolean;
+  gameInviteCode: string | null;
+}
+
+export interface Club {
+  id: string;
+  coachId: string;
+  name: string;
+}
+
+export interface OfflinePlayer {
+  id: string;
+  name: string;
+  bindCode: string | null;
 }
 
 export interface TeamGroup {
@@ -35,14 +54,25 @@ export interface TeamGroup {
   coachId: string;
   name: string;
   playerIds: string[];
+  offlinePlayers: OfflinePlayer[];
   inviteCode: string | null;
+  ageGroup: string | null;
+  gender: "male" | "female" | "mixed" | null;
+  clubId: string | null;
+  sport: string | null;
 }
 
 export interface RosterEntry {
   id: string;
   gameId: string;
   playerId: string;
-  status: 'invited' | 'pending_guardian' | 'pending_coach' | 'approved' | 'withdrawn';
+  status:
+    | "invited"
+    | "pending_guardian"
+    | "pending_coach"
+    | "approved"
+    | "not_participating"
+    | "withdrawn";
   guardianApproved: boolean;
   withdrawReason: string | null;
 }
@@ -51,7 +81,8 @@ export interface MatchApplication {
   id: string;
   gameId: string;
   applicantCoachId: string;
-  status: 'pending' | 'accepted' | 'rejected';
+  applicantGroupId: string | null;
+  status: "pending" | "accepted" | "rejected";
 }
 
 export interface AdminSettings {

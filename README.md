@@ -18,6 +18,19 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
+3. Configure environment variables (shared by frontend and backend)
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Required keys in `.env`:
+
+   - `EXPO_PUBLIC_API_BASE_URL` (frontend API base, include `/api`)
+   - `APP_BASE_URL` (backend public base URL for email links)
+   - `SMTP_HOST`, `SMTP_PORT`, `SENDER_EMAIL`, `SENDER_NAME`, `GMAIL_APP_PASSWORD`
+   - `CORS_ALLOW_ORIGINS` (comma-separated, or `*`)
+
 In the output, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)
@@ -56,3 +69,4 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+# VS-game

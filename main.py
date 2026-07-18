@@ -1,0 +1,1701 @@
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import text, inspect as sa_inspect
+from database import engine, Base, get_db, SessionLocal
+import models
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+import uuid
+import random
+import string
+from datetime import datetime, date
+import re
+import asyncio
+from contextlib import asynccontextmanager
+import os
+import threading
+import smtplib
+from email.message import EmailMessage
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Minimal .env loader for local/dev usage without extra dependencies."""
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception as exc:
+        print(f"[env] failed to load {path}: {exc}", flush=True)
+
+_load_dotenv()
+
+# ---- Email config ----
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
+SENDER_NAME = os.environ.get("SENDER_NAME", "Team Matcher")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://135.125.134.199.sslip.io")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+CORS_ALLOW_ORIGINS = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+
+def _send_email(to_email: str, subject: str, html: str) -> None:
+    """Send via Gmail SMTP."""
+    if not SENDER_EMAIL:
+        print(f"[EMAIL SKIP] No SENDER_EMAIL — subject='{subject}' to={to_email}", flush=True)
+        return
+    if not GMAIL_APP_PASSWORD:
+        print(f"[EMAIL SKIP] No GMAIL_APP_PASSWORD — subject='{subject}' to={to_email}", flush=True)
+        return
+    msg = EmailMessage()
+    msg["From"] = f"{SENDER_NAME} <{SENDER_EMAIL}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(html, subtype="html")
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+        server.login(SENDER_EMAIL, GMAIL_APP_PASSWORD)
+        server.send_message(msg)
+
+def send_verification_email(to_email: str, name: str, token: str):
+    verify_url = f"{APP_BASE_URL}/api/verify_email?token={token}"
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px">
+      <h2 style="color:#1d4ed8">Team Matcher — 邮箱验证</h2>
+      <p>Hi {name}，感谢注册！请点击下方按钮验证您的邮箱地址。</p>
+      <a href="{verify_url}" style="display:inline-block;padding:12px 28px;background:#1d4ed8;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;margin:16px 0">验证邮箱 / Verify Email</a>
+      <p style="color:#64748b;font-size:13px">如果按钮无法点击，请复制以下链接到浏览器：<br>{verify_url}</p>
+      <p style="color:#94a3b8;font-size:12px">此链接仅可使用一次。如非本人操作，请忽略此邮件。</p>
+    </div>
+    """
+    def _do():
+        try:
+            _send_email(to_email, "验证您的邮箱 / Verify your email", html)
+            print(f"[EMAIL OK] Verification sent to {to_email}", flush=True)
+        except Exception as e:
+            print(f"[EMAIL ERROR] Verification to {to_email}: {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+
+def send_admin_registration_notification(user_email: str, user_name: str, role: str):
+    """Notify admin that a new account was registered using this email address."""
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+      <h2 style="color:#1d4ed8">新用户注册通知 / New Registration</h2>
+      <p>以下邮箱已被用于注册 Team Matcher 账户：</p>
+      <table style="width:100%;border-collapse:collapse;margin-top:16px">
+        <tr><td style="padding:6px 0;color:#64748b;width:100px">邮箱</td><td><b>{user_email}</b></td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">姓名</td><td>{user_name}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">角色</td><td>{role}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">时间</td><td>{ts}</td></tr>
+      </table>
+      <p style="color:#94a3b8;font-size:12px;margin-top:24px">如非本人操作，请忽略此邮件。</p>
+    </div>
+    """
+    def _do():
+        try:
+            _send_email(user_email, f"[Team Matcher] 新用户注册: {user_email}", html)
+            print(f"[EMAIL OK] Admin notified of registration: {user_email}", flush=True)
+        except Exception as e:
+            print(f"[EMAIL ERROR] Admin notification: {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+
+
+_INVALID_PWD_RE = re.compile(r'[ <>"\']')
+
+# ---- In-memory email code store: {email: (code, expires_timestamp)} ----
+_email_codes: dict = {}
+
+def normalize_verification_code(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    # Normalize full-width digits and remove all spaces.
+    trans = str.maketrans("０１２３４５６７８９", "0123456789")
+    return raw.translate(trans).replace(" ", "").strip()
+
+def save_email_code(db: Session, email: str, code: str, expires_ts: float) -> None:
+    _email_codes[email] = (code, expires_ts)
+    try:
+        db.execute(
+            text(
+                """
+                INSERT INTO email_codes (email, code, expires_ts)
+                VALUES (:email, :code, :expires_ts)
+                ON CONFLICT (email)
+                DO UPDATE SET code = :code, expires_ts = :expires_ts
+                """
+            ),
+            {"email": email, "code": code, "expires_ts": expires_ts},
+        )
+        db.commit()
+    except Exception as exc:
+        print(f"[email_code] save fallback memory only: {exc}", flush=True)
+
+def get_email_code_entry(db: Session, email: str) -> Optional[tuple[str, float]]:
+    try:
+        row = db.execute(
+            text("SELECT code, expires_ts FROM email_codes WHERE email = :email"),
+            {"email": email},
+        ).first()
+        if row:
+            return (row[0], float(row[1]))
+    except Exception:
+        pass
+    return _email_codes.get(email)
+
+def delete_email_code(db: Session, email: str) -> None:
+    _email_codes.pop(email, None)
+    try:
+        db.execute(text("DELETE FROM email_codes WHERE email = :email"), {"email": email})
+        db.commit()
+    except Exception:
+        pass
+
+def is_email_code_valid(db: Session, email: str, submitted_code: Optional[str]) -> bool:
+    import time as _time
+    entry = get_email_code_entry(db, email)
+    if not entry:
+        return False
+    stored_code, expires_ts = entry
+    return expires_ts >= _time.time() and stored_code == normalize_verification_code(submitted_code)
+
+def send_password_changed_email(to_email: str, name: str):
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+      <h2 style="color:#dc2626">Team Matcher — 密码已更改 / Password Changed</h2>
+      <p>Hi {name}，您的账户密码刚刚已被成功修改。</p>
+      <p>Hi {name}, your account password was just successfully changed.</p>
+      <table style="width:100%;border-collapse:collapse;margin-top:16px">
+        <tr><td style="padding:6px 0;color:#64748b;width:100px">邮箱</td><td><b>{to_email}</b></td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">时间</td><td>{ts}</td></tr>
+      </table>
+      <p style="color:#dc2626;margin-top:20px">如非本人操作，请立即联系管理员。<br>If this was not you, please contact admin immediately.</p>
+    </div>
+    """
+    def _do():
+        try:
+            _send_email(to_email, "[Team Matcher] 密码已修改 / Password Changed", html)
+            print(f"[EMAIL OK] Password change notification sent to {to_email}", flush=True)
+        except Exception as e:
+            print(f"[EMAIL ERROR] Password change notification to {to_email}: {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+
+def send_code_email(to_email: str, code: str):
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px">
+      <h2 style="color:#1d4ed8">Team Matcher — 邮箱验证</h2>
+      <p>您的注册验证码为：</p>
+      <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#1d4ed8;margin:24px 0">{code}</div>
+      <p style="color:#64748b;font-size:13px">验证码10分钟内有效，请勿告知他人。<br>This code is valid for 10 minutes.</p>
+    </div>
+    """
+    _send_email(to_email, "邮箱验证码 / Your Verification Code", html)
+    print(f"[EMAIL OK] Code sent to {to_email}")
+
+
+def _send_code_email_safe(to_email: str, code: str, source: str) -> None:
+    """Send code email in background and keep endpoint response fast."""
+    try:
+        send_code_email(to_email, code)
+    except Exception as e:
+        print(f"[EMAIL ERROR] {source} to {to_email}: {e}", flush=True)
+
+async def _cleanup_expired_games():
+    """Background loop: delete games whose time is more than 1 day in the past and notify coaches."""
+    while True:
+        try:
+            db = SessionLocal()
+            now = datetime.utcnow()
+            games = db.query(models.Game).all()
+            for game in games:
+                try:
+                    game_time = datetime.fromisoformat(game.time)
+                except Exception:
+                    continue
+                if (now - game_time).total_seconds() <= 86400:
+                    continue
+                # Collect coach IDs to notify (creator + opposing coach if set)
+                coach_ids: set = set()
+                if game.creator_id:
+                    coach_ids.add(game.creator_id)
+                if game.opposing_team_id:
+                    coach_ids.add(game.opposing_team_id)
+                ts = datetime.utcnow().isoformat()
+                for coach_id in coach_ids:
+                    db.add(models.Notification(
+                        id=f"n_{uuid.uuid4().hex[:12]}",
+                        target_user_id=coach_id,
+                        title="比赛已自动删除 / Match Auto-Removed",
+                        body=(
+                            f"比赛【{game.sport} @ {game.location}（{game.time}）】"
+                            f"已结束超过1天，系统已自动将其删除。"
+                            f" / The match [{game.sport} @ {game.location} ({game.time})] "
+                            f"ended over 1 day ago and has been automatically removed."
+                        ),
+                        read=False,
+                        ts=ts,
+                    ))
+                # Remove dependent records then the game itself
+                db.query(models.MatchApplication).filter(
+                    models.MatchApplication.game_id == game.id
+                ).delete(synchronize_session=False)
+                db.query(models.Roster).filter(
+                    models.Roster.game_id == game.id
+                ).delete(synchronize_session=False)
+                db.delete(game)
+            db.commit()
+        except Exception as exc:
+            print(f"[cleanup] error during expired-game sweep: {exc}")
+        finally:
+            db.close()
+        await asyncio.sleep(3600)  # repeat every hour
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    task = asyncio.create_task(_cleanup_expired_games())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in CORS_ALLOW_ORIGINS.split(",") if o.strip()] or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==========================================
+# Startup: migrate schema then seed data
+# ==========================================
+
+def run_migrations():
+    """Safely add new columns to existing tables (idempotent)"""
+    insp = sa_inspect(engine)
+    existing_tables = insp.get_table_names()
+    with engine.begin() as conn:
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS email_codes (
+                email VARCHAR PRIMARY KEY,
+                code VARCHAR NOT NULL,
+                expires_ts DOUBLE PRECISION NOT NULL
+            )
+            """
+        ))
+        if 'games' in existing_tables:
+            game_cols = {c['name'] for c in insp.get_columns('games')}
+            if 'deadline' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN deadline VARCHAR"))
+            if 'description' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN description VARCHAR"))
+            if 'volunteers' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN volunteers JSON DEFAULT '[]'::json"))
+            if 'contact_phone' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN contact_phone VARCHAR"))
+            if 'gender' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN gender VARCHAR"))
+            if 'home_group_id' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN home_group_id VARCHAR"))
+            if 'opposing_group_id' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN opposing_group_id VARCHAR"))
+            if 'is_private' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN is_private BOOLEAN DEFAULT FALSE"))
+            if 'game_invite_code' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN game_invite_code VARCHAR"))
+        if 'match_applications' in existing_tables:
+            ma_cols = {c['name'] for c in insp.get_columns('match_applications')}
+            if 'applicant_group_id' not in ma_cols:
+                conn.execute(text("ALTER TABLE match_applications ADD COLUMN applicant_group_id VARCHAR"))
+        if 'users' in existing_tables:
+            user_cols = {c['name'] for c in insp.get_columns('users')}
+            if 'sport' not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN sport VARCHAR"))
+            if 'status' not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN status VARCHAR DEFAULT 'active'"))
+            if 'password' not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password VARCHAR DEFAULT 'password123'"))
+        if 'users' in existing_tables:
+            user_cols2 = {c['name'] for c in insp.get_columns('users')}
+            if 'default_location' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN default_location VARCHAR"))
+            if 'default_club_id' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN default_club_id VARCHAR"))
+            if 'verification_token' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN verification_token VARCHAR"))
+        if 'team_groups' in existing_tables:
+            tg_cols = {c['name'] for c in insp.get_columns('team_groups')}
+            if 'invite_code' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN invite_code VARCHAR"))
+                rows = conn.execute(text("SELECT id FROM team_groups")).fetchall()
+                for row in rows:
+                    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                    conn.execute(text("UPDATE team_groups SET invite_code = :code WHERE id = :id"), {"code": code, "id": row[0]})
+            if 'team_name' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN team_name VARCHAR"))
+            if 'age_group' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN age_group VARCHAR"))
+            if 'gender' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN gender VARCHAR"))
+            if 'club_id' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN club_id VARCHAR"))
+            if 'offline_players' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN offline_players JSON DEFAULT '[]'::json"))
+            if 'sport' not in tg_cols:
+                conn.execute(text("ALTER TABLE team_groups ADD COLUMN sport VARCHAR"))
+        # notifications table is created automatically by SQLAlchemy metadata
+
+def seed_database(db: Session):
+    """Insert default demo users/games/groups if the DB is empty"""
+    if db.query(models.User).count() > 0:
+        return
+    users = [
+        models.User(id='c1', role='coach', name='Coach Alex', email='alex@coach.com', phone='+1 234-567-8900',
+                    bio='10 years of coaching experience. Focusing on youth development, teamwork, and core soccer skills.',
+                    sport='Soccer', status='active', password='password123'),
+        models.User(id='c2', role='coach', name='Coach Bob', email='bob@coach.com', phone='+1 987-654-3210',
+                    bio='Former pro player. Passionate about tactical analysis and building highly competitive adult leagues.',
+                    sport='Soccer', status='active', password='password123'),
+        models.User(id='p1', role='player', name='Mike (Adult)', email='mike@player.com', dob='1995-05-10', phone='123-456-7890', password='password123'),
+        models.User(id='p2', role='player', name='Timmy (U16)', email='timmy@player.com', dob='2015-08-20', guardian_id='g1', password='password123'),
+        models.User(id='g1', role='guardian', name='Timmy Mom', email='mom@guardian.com', password='password123'),
+        models.User(id='admin1', role='admin', name='System Admin', email='admin@system.com', password='password123'),
+    ]
+    games = [
+        models.Game(id='game1', creator_id='c2', sport='Soccer', time='2026-03-20T14:00', location='City Stadium',
+                    age_group='U12', deadline='2026-03-15', status='open',
+                    description='Friendly match for U12. Please bring white and dark jerseys. Contact me at bob@coach.com for questions.',
+                    volunteers=[]),
+        models.Game(id='game2', creator_id='c1', sport='Soccer', time='2026-03-25T10:00', location='North Park',
+                    age_group='Adult', deadline='2026-03-20', status='open',
+                    description='Competitive adult league prep. Looking for a strong opponent.',
+                    volunteers=[]),
+    ]
+    team_groups = [
+        models.TeamGroup(id='tg1', coach_id='c1', team_name='Strikers', age_group='U12', player_ids=['p1', 'p2']),
+    ]
+    settings = models.Settings(id=1, underage_limit=16)
+    for u in users:
+        db.add(u)
+    db.commit()
+    for g in games:
+        db.add(g)
+    for tg in team_groups:
+        db.add(tg)
+    db.add(settings)
+    db.commit()
+
+run_migrations()
+Base.metadata.create_all(bind=engine)
+_startup_db = SessionLocal()
+seed_database(_startup_db)
+_startup_db.close()
+
+# ==========================================
+# Pydantic Schemas
+# ==========================================
+
+class UserCreate(BaseModel):
+    role: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    dob: Optional[str] = None
+    guardianId: Optional[str] = None
+    bio: Optional[str] = None
+    sport: Optional[str] = None
+    status: Optional[str] = 'active'
+
+class UserResponse(BaseModel):
+    id: str
+    role: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    dob: Optional[str] = None
+    guardian_id: Optional[str] = None
+    bio: Optional[str] = None
+    sport: Optional[str] = None
+    status: Optional[str] = None
+    default_location: Optional[str] = None
+    default_club_id: Optional[str] = None
+    verification_token: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class CoachProfileUpdate(BaseModel):
+    phone: Optional[str] = None
+    defaultLocation: Optional[str] = None
+    defaultClubId: Optional[str] = None
+    sport: Optional[str] = None
+
+class GameCreate(BaseModel):
+    creatorId: str
+    sport: str
+    time: str
+    location: str
+    ageGroup: str
+    gender: Optional[str] = None  # 'male' | 'female' | 'mixed'
+    deadline: Optional[str] = None
+    description: Optional[str] = None
+    contactPhone: Optional[str] = None
+    homeGroupId: Optional[str] = None
+    isPrivate: Optional[bool] = False
+
+class GameUpdate(BaseModel):
+    time: Optional[str] = None
+    location: Optional[str] = None
+    ageGroup: Optional[str] = None
+    gender: Optional[str] = None
+    deadline: Optional[str] = None
+    description: Optional[str] = None
+    contactPhone: Optional[str] = None
+    opposingTeamId: Optional[str] = None
+    status: Optional[str] = None
+
+class GameResponse(BaseModel):
+    id: str
+    creator_id: str
+    sport: str
+    time: str
+    location: str
+    age_group: str
+    gender: Optional[str] = None
+    deadline: Optional[str] = None
+    description: Optional[str] = None
+    contact_phone: Optional[str] = None
+    status: str
+    opposing_team_id: Optional[str] = None
+    opposing_group_id: Optional[str] = None
+    volunteers: Optional[list] = []
+    home_group_id: Optional[str] = None
+    is_private: Optional[bool] = False
+    game_invite_code: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class TeamGroupCreate(BaseModel):
+    coachId: str
+    teamName: str
+    ageGroup: str
+    playerIds: Optional[list] = []
+    gender: Optional[str] = None
+    clubId: Optional[str] = None
+    sport: Optional[str] = None
+
+class TeamGroupUpdate(BaseModel):
+    teamName: str
+    ageGroup: str
+    gender: Optional[str] = None
+    clubId: Optional[str] = None
+    sport: Optional[str] = None
+
+class OfflinePlayerResponse(BaseModel):
+    id: str
+    name: str
+    bind_code: Optional[str] = None
+
+class OfflinePlayerCreate(BaseModel):
+    name: str
+
+class TeamGroupResponse(BaseModel):
+    id: str
+    coach_id: str
+    team_name: str
+    age_group: str
+    player_ids: Optional[list] = []
+    invite_code: Optional[str] = None
+    gender: Optional[str] = None
+    club_id: Optional[str] = None
+    offline_players: Optional[list] = []
+    sport: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class ClubCreate(BaseModel):
+    coachId: str
+    name: str
+
+class ClubResponse(BaseModel):
+    id: str
+    coach_id: str
+    name: str
+    class Config:
+        from_attributes = True
+
+class PlayerAction(BaseModel):
+    playerId: str
+
+class JoinTeamByInviteRequest(BaseModel):
+    playerId: str
+    inviteCode: str
+
+class MovePlayerRequest(BaseModel):
+    playerId: str
+    fromGroup: str
+    toGroup: str
+
+class MatchApplicationCreate(BaseModel):
+    gameId: str
+    applicantCoachId: str
+    applicantGroupId: Optional[str] = None
+    status: Optional[str] = 'pending'
+
+class MatchApplicationStatusUpdate(BaseModel):
+    status: str
+
+class MatchApplicationResponse(BaseModel):
+    id: str
+    game_id: str
+    applicant_coach_id: str
+    applicant_group_id: Optional[str] = None
+    status: str
+    class Config:
+        from_attributes = True
+
+class RosterCreate(BaseModel):
+    gameId: str
+    playerId: str
+    status: Optional[str] = 'invited'
+
+class RosterStatusUpdate(BaseModel):
+    status: str
+    guardian_approved: Optional[bool] = None
+    withdraw_reason: Optional[str] = None
+
+class RosterResponse(BaseModel):
+    id: str
+    game_id: str
+    player_id: str
+    status: str
+    guardian_approved: bool
+    withdraw_reason: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class VolunteerAction(BaseModel):
+    volunteerId: str
+    action: str  # 'add' or 'remove'
+
+class SettingsUpdate(BaseModel):
+    underageLimit: int
+
+class SettingsResponse(BaseModel):
+    underage_limit: int
+    class Config:
+        from_attributes = True
+
+# ==========================================
+# API Routes
+# ==========================================
+
+# --- Auth ---
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/api/login", response_model=UserResponse)
+def login(body: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email.ilike(body.email.strip())).first()
+    if not user or user.password != body.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user.status == 'pending':
+        raise HTTPException(status_code=403, detail="EMAIL_NOT_VERIFIED")
+    return user
+
+@app.get("/api/verify_email", response_class=HTMLResponse)
+def verify_email(token: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.verification_token == token).first()
+    if not user:
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#ef4444">&#x274C; 验证链接无效或已过期</h2>
+        <p>The verification link is invalid or has already been used.</p>
+        </body></html>
+        """, status_code=400)
+    user.status = 'active'
+    user.verification_token = None
+    db.commit()
+    return HTMLResponse("""
+    <html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f8fafc">
+    <div style="max-width:400px;margin:auto;background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+    <div style="font-size:48px">&#x2705;</div>
+    <h2 style="color:#16a34a;margin-top:16px">邮箱验证成功！</h2>
+    <p style="color:#475569">Your email has been verified. You can now log in to the app.</p>
+    <p style="color:#64748b;font-size:13px;margin-top:24px">请返回 App 登录。/ Please return to the app and sign in.</p>
+    </div></body></html>
+    """)
+
+@app.post("/api/resend_verification")
+def resend_verification(body: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == body.email.strip().lower()).first()
+    if not user or user.status != 'pending':
+        raise HTTPException(status_code=400, detail="Account not found or already verified")
+    token = uuid.uuid4().hex
+    user.verification_token = token
+    db.commit()
+    send_verification_email(user.email, user.name, token)
+    return {"ok": True}
+
+class SendCodeRequest(BaseModel):
+    email: str
+
+@app.post("/api/send_email_code")
+def send_email_code_endpoint(
+    body: SendCodeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(status_code=400, detail="该邮箱已注册 / Email already registered")
+    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    import time as _time
+    save_email_code(db, email, code, _time.time() + 600)
+    background_tasks.add_task(_send_code_email_safe, email, code, "send_email_code")
+    return {"ok": True}
+
+@app.post("/api/send_login_verify_code")
+def send_login_verify_code_endpoint(
+    body: SendCodeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Send a verification code specifically for activating a pending account at login."""
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+    user = db.query(models.User).filter(models.User.email.ilike(email)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在 / User not found")
+    if user.status != 'pending':
+        raise HTTPException(status_code=400, detail="该账号已验证，请直接登录 / Account already verified")
+    # Normalise stored email to lowercase
+    if user.email != email:
+        user.email = email
+        db.commit()
+    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    import time as _time
+    save_email_code(db, email, code, _time.time() + 600)
+    background_tasks.add_task(_send_code_email_safe, email, code, "send_login_verify_code")
+    return {"ok": True}
+
+@app.post("/api/send_password_reset_code")
+def send_password_reset_code_endpoint(
+    body: SendCodeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+    user = db.query(models.User).filter(models.User.email.ilike(email)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在 / User not found")
+
+    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    import time as _time
+    save_email_code(db, email, code, _time.time() + 600)
+    background_tasks.add_task(_send_code_email_safe, email, code, "send_password_reset_code")
+    return {"ok": True}
+
+class VerifyEmailCodeRequest(BaseModel):
+    email: str
+    code: str
+
+@app.post("/api/verify_email_code", response_model=UserResponse)
+def verify_email_code_endpoint(body: VerifyEmailCodeRequest, db: Session = Depends(get_db)):
+    email_key = body.email.strip().lower()
+    if not is_email_code_valid(db, email_key, body.code):
+        raise HTTPException(status_code=400, detail="验证码无效或已过期 / Verification code is invalid or expired")
+    user = db.query(models.User).filter(models.User.email.ilike(email_key)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在 / User not found")
+    if user.status == 'pending':
+        user.status = 'active'
+        user.verification_token = None
+        db.commit()
+        db.refresh(user)
+    delete_email_code(db, email_key)
+    return user
+
+# --- Invite Codes (legacy one-time codes, kept for backward compatibility) ---
+
+def generate_unique_group_code(db: Session) -> str:
+    for _ in range(20):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if not db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first():
+            return code
+    return uuid.uuid4().hex[:8].upper()
+
+def generate_unique_offline_bind_code(db: Session) -> str:
+    existing_codes: set[str] = set()
+    groups = db.query(models.TeamGroup).all()
+    for g in groups:
+        players = list(g.offline_players or [])
+        for p in players:
+            code = (p.get("bind_code") or "").strip().upper()
+            if code:
+                existing_codes.add(code)
+    for _ in range(30):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if code in existing_codes:
+            continue
+        if db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first():
+            continue
+        return code
+    return uuid.uuid4().hex[:8].upper()
+
+class InviteCodeCreate(BaseModel):
+    coachId: str
+    groupId: Optional[str] = None
+
+class InviteCodeResponse(BaseModel):
+    id: str
+    code: str
+    coach_id: str
+    group_id: Optional[str] = None
+    used: bool
+    used_by_player_id: Optional[str] = None
+    created_at: str
+    class Config:
+        from_attributes = True
+
+@app.post("/api/invite_codes", response_model=InviteCodeResponse, status_code=201)
+def create_invite_code(body: InviteCodeCreate, db: Session = Depends(get_db)):
+    coach = db.query(models.User).filter(models.User.id == body.coachId, models.User.role == 'coach').first()
+    if not coach:
+        raise HTTPException(status_code=404, detail="Coach not found")
+    # Generate unique 8-char uppercase alphanumeric code
+    for _ in range(10):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if not db.query(models.InviteCode).filter(models.InviteCode.code == code).first():
+            break
+    new_code = models.InviteCode(
+        id=f"ic_{uuid.uuid4().hex[:8]}",
+        code=code,
+        coach_id=body.coachId,
+        group_id=body.groupId,
+        used=False,
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(new_code)
+    db.commit()
+    db.refresh(new_code)
+    return new_code
+
+@app.get("/api/invite_codes", response_model=List[InviteCodeResponse])
+def get_invite_codes(coachId: str, db: Session = Depends(get_db)):
+    return db.query(models.InviteCode).filter(models.InviteCode.coach_id == coachId).all()
+
+# --- Coach Invite Codes ---
+
+class CoachInviteCodeCreate(BaseModel):
+    requesterId: str  # must be coach or admin
+
+class CoachInviteCodeResponse(BaseModel):
+    id: str
+    code: str
+    created_by_id: str
+    used: bool
+    used_by_id: Optional[str] = None
+    created_at: str
+    class Config:
+        from_attributes = True
+
+@app.post("/api/coach_invite_codes", response_model=CoachInviteCodeResponse, status_code=201)
+def create_coach_invite_code(body: CoachInviteCodeCreate, db: Session = Depends(get_db)):
+    requester = db.query(models.User).filter(models.User.id == body.requesterId).first()
+    if not requester or requester.role not in ('coach', 'admin'):
+        raise HTTPException(status_code=403, detail="只有教练或管理员才能生成教练邀请码 / Only coaches or admins can generate coach invite codes")
+    for _ in range(20):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if not db.query(models.CoachInviteCode).filter(models.CoachInviteCode.code == code).first():
+            break
+    new_code = models.CoachInviteCode(
+        id=f"cic_{uuid.uuid4().hex[:8]}",
+        code=code,
+        created_by_id=body.requesterId,
+        used=False,
+        created_at=datetime.utcnow().isoformat(),
+    )
+    db.add(new_code)
+    db.commit()
+    db.refresh(new_code)
+    return new_code
+
+@app.get("/api/coach_invite_codes", response_model=List[CoachInviteCodeResponse])
+def get_coach_invite_codes(createdBy: str, db: Session = Depends(get_db)):
+    return db.query(models.CoachInviteCode).filter(models.CoachInviteCode.created_by_id == createdBy).all()
+
+# --- Coach Self-Registration ---
+
+class CoachRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    coachInviteCode: str
+    emailCode: str
+    sport: Optional[str] = None
+    dob: Optional[str] = None
+    phone: Optional[str] = None
+    clubName: Optional[str] = None
+
+@app.post("/api/register_coach", response_model=UserResponse, status_code=201)
+def register_coach(body: CoachRegisterRequest, db: Session = Depends(get_db)):
+    email_key = body.email.strip().lower()
+    if not is_email_code_valid(db, email_key, body.emailCode):
+        raise HTTPException(status_code=400, detail="邮箱验证码无效或已过期 / Email verification code is invalid or expired")
+    if _INVALID_PWD_RE.search(body.password):
+        raise HTTPException(status_code=400, detail="密码不能包含空格、<、>、引号 / Password cannot contain spaces, <, >, or quotes")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
+    invite = db.query(models.CoachInviteCode).filter(
+        models.CoachInviteCode.code == body.coachInviteCode.upper().strip()
+    ).first()
+    if not invite or invite.used:
+        raise HTTPException(status_code=400, detail="教练注册码无效或已被使用 / Coach invite code is invalid or already used")
+    if db.query(models.User).filter(models.User.email == body.email.strip().lower()).first():
+        raise HTTPException(status_code=400, detail="该邮箱已注册 / Email already registered")
+    new_coach = models.User(
+        id=f"c_{uuid.uuid4().hex[:8]}",
+        role='coach',
+        name=body.name,
+        email=body.email.strip().lower(),
+        password=body.password,
+        dob=body.dob,
+        phone=body.phone,
+        sport=body.sport,
+        status='active',
+        verification_token=None,
+    )
+    db.add(new_coach)
+    invite.used = True
+    invite.used_by_id = new_coach.id
+    db.commit()
+    db.refresh(new_coach)
+    # Auto-create club if name provided
+    if body.clubName and body.clubName.strip():
+        new_club = models.Club(
+            id=f"cl_{uuid.uuid4().hex[:8]}",
+            coach_id=new_coach.id,
+            name=body.clubName.strip(),
+        )
+        db.add(new_club)
+        new_coach.default_club_id = new_club.id
+        db.commit()
+        db.refresh(new_coach)
+    delete_email_code(db, body.email.strip().lower())  # invalidate used code
+    send_admin_registration_notification(new_coach.email, new_coach.name, 'coach')
+    return new_coach
+
+# --- Player Self-Registration ---
+
+class PlayerRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    inviteCode: str
+    emailCode: str
+    dob: Optional[str] = None
+    phone: Optional[str] = None
+    # Guardian fields — required when player is underage
+    guardianName: Optional[str] = None
+    guardianEmail: Optional[str] = None
+    guardianPassword: Optional[str] = None
+
+def _calc_age(dob_str: str) -> Optional[int]:
+    try:
+        dob = date.fromisoformat(dob_str)
+        today = date.today()
+        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    except Exception:
+        return None
+
+@app.post("/api/register", response_model=UserResponse, status_code=201)
+def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
+    email_key = body.email.strip().lower()
+    if not is_email_code_valid(db, email_key, body.emailCode):
+        raise HTTPException(status_code=400, detail="邮箱验证码无效或已过期 / Email verification code is invalid or expired")
+    # Validate player password
+    if _INVALID_PWD_RE.search(body.password):
+        raise HTTPException(status_code=400, detail="密码不能包含空格、<、>、引号 / Password cannot contain spaces, <, >, or quotes")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
+    code = body.inviteCode.upper().strip()
+    # 1) Try regular team invite code first.
+    group = db.query(models.TeamGroup).filter(
+        models.TeamGroup.invite_code == code
+    ).first()
+    # 2) Fallback: dedicated bind code of an offline player placeholder.
+    bound_offline_id: Optional[str] = None
+    bound_offline_name: Optional[str] = None
+    if not group:
+        for tg in db.query(models.TeamGroup).all():
+            players = list(tg.offline_players or [])
+            matched = next(
+                (
+                    p
+                    for p in players
+                    if (p.get("bind_code") or "").strip().upper() == code
+                ),
+                None,
+            )
+            if matched:
+                group = tg
+                bound_offline_id = matched.get("id")
+                bound_offline_name = (matched.get("name") or "").strip() or None
+                break
+    if not group:
+        raise HTTPException(status_code=400, detail="邀请码无效 / Invalid invite code")
+    # Check email uniqueness
+    if db.query(models.User).filter(models.User.email == body.email.strip().lower()).first():
+        raise HTTPException(status_code=400, detail="该邮箱已注册 / Email already registered")
+    # Check underage limit
+    settings = db.query(models.Settings).filter(models.Settings.id == 1).first()
+    underage_limit = settings.underage_limit if settings else 16
+    age = _calc_age(body.dob) if body.dob else None
+    is_underage = age is not None and age < underage_limit
+    if is_underage:
+        if not body.guardianName or not body.guardianEmail or not body.guardianPassword:
+            raise HTTPException(status_code=400, detail=f"未满{underage_limit}岁的球员注册时必须同时注册监护人账号 / Players under {underage_limit} must register a guardian account")
+        if _INVALID_PWD_RE.search(body.guardianPassword):
+            raise HTTPException(status_code=400, detail="监护人密码不能包含空格、<、>、引号 / Guardian password cannot contain spaces, <, >, or quotes")
+        if len(body.guardianPassword) < 6:
+            raise HTTPException(status_code=400, detail="监护人密码至少需要6位 / Guardian password must be at least 6 characters")
+        if db.query(models.User).filter(models.User.email == body.guardianEmail.strip().lower()).first():
+            raise HTTPException(status_code=400, detail="监护人邮箱已注册 / Guardian email already registered")
+    # Get coach's sport
+    coach = db.query(models.User).filter(models.User.id == group.coach_id).first()
+    # Create guardian first if underage
+    guardian_id = None
+    if is_underage:
+        new_guardian = models.User(
+            id=f"g_{uuid.uuid4().hex[:8]}",
+            role='guardian',
+            name=body.guardianName,
+            email=body.guardianEmail.strip().lower(),
+            password=body.guardianPassword,
+            status='active',
+        )
+        db.add(new_guardian)
+        db.flush()
+        guardian_id = new_guardian.id
+    new_player = models.User(
+        id=f"p_{uuid.uuid4().hex[:8]}",
+        role='player',
+        name=bound_offline_name or body.name,
+        email=body.email.strip().lower(),
+        password=body.password,
+        dob=body.dob,
+        phone=body.phone,
+        sport=coach.sport if coach else None,
+        status='active',
+        guardian_id=guardian_id,
+        verification_token=None,
+    )
+    db.add(new_player)
+    db.flush()
+    # Add player to group
+    ids = list(group.player_ids or [])
+    if new_player.id not in ids:
+        ids.append(new_player.id)
+    group.player_ids = ids
+    # If registered via dedicated offline bind code, consume the placeholder
+    # (which also removes that one-time bind code from DB state).
+    if bound_offline_id:
+        players = list(group.offline_players or [])
+        group.offline_players = [
+            p for p in players if (p.get("id") or "") != bound_offline_id
+        ]
+    db.add(models.Notification(
+        id=f"n_{uuid.uuid4().hex[:12]}",
+        target_user_id=group.coach_id,
+        title="👥 新球员加入分组 / New Player Joined",
+        body=(
+            f"{new_player.name} registered and joined your team {group.team_name}."
+            if not bound_offline_id
+            else f"{new_player.name} registered and claimed an offline player slot in {group.team_name}."
+        ),
+        read=False,
+        ts=datetime.utcnow().isoformat(),
+    ))
+    db.commit()
+    db.refresh(new_player)
+    delete_email_code(db, email_key)
+    send_admin_registration_notification(new_player.email, new_player.name, 'player')
+    return new_player
+
+# --- Users ---
+
+@app.get("/api/check_email")
+def check_email(email: str, db: Session = Depends(get_db)):
+    exists = db.query(models.User).filter(models.User.email == email.strip().lower()).first() is not None
+    return {"taken": exists}
+
+@app.get("/api/users", response_model=List[UserResponse])
+def get_all_users(db: Session = Depends(get_db)):
+    return db.query(models.User).all()
+
+@app.post("/api/users", response_model=UserResponse, status_code=201)
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(models.User).filter(models.User.email == user.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    new_user = models.User(
+        id=f"u_{uuid.uuid4().hex[:8]}",
+        role=user.role,
+        name=user.name,
+        email=user.email,
+        phone=user.phone,
+        dob=user.dob,
+        guardian_id=user.guardianId,
+        bio=user.bio,
+        sport=user.sport,
+        status=user.status or 'active',
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.put("/api/users/{user_id}/profile", response_model=UserResponse)
+def update_coach_profile(user_id: str, data: CoachProfileUpdate, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if data.phone is not None:
+        user.phone = data.phone.strip() or None
+    if data.defaultLocation is not None:
+        user.default_location = data.defaultLocation.strip() or None
+    if data.defaultClubId is not None:
+        user.default_club_id = data.defaultClubId or None
+    if data.sport is not None:
+        user.sport = data.sport.strip() or None
+    db.commit()
+    db.refresh(user)
+    return user
+
+class ChangePasswordRequest(BaseModel):
+    newPassword: str
+    emailCode: str
+
+_INVALID_PWD_RE_INLINE = re.compile(r'[ <>\'"]')
+
+@app.post("/api/users/{user_id}/change_password")
+def change_password(user_id: str, data: ChangePasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    email_key = user.email.strip().lower()
+    if not is_email_code_valid(db, email_key, data.emailCode):
+        raise HTTPException(status_code=400, detail="验证码无效或已过期 / Verification code is invalid or expired")
+
+    if _INVALID_PWD_RE.search(data.newPassword):
+        raise HTTPException(status_code=400, detail="密码不能包含空格、<、>、引号 / Password cannot contain spaces, <, >, or quotes")
+    if len(data.newPassword) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
+
+    user.password = data.newPassword
+    db.commit()
+    delete_email_code(db, email_key)
+    send_password_changed_email(user.email, user.name)
+    return {"ok": True}
+
+class ResetPasswordByEmailRequest(BaseModel):
+    email: str
+    emailCode: str
+    newPassword: str
+
+@app.post("/api/reset_password_by_email")
+def reset_password_by_email(data: ResetPasswordByEmailRequest, db: Session = Depends(get_db)):
+    email_key = data.email.strip().lower()
+    if not email_key or "@" not in email_key:
+        raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+    user = db.query(models.User).filter(models.User.email.ilike(email_key)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在 / User not found")
+    if not is_email_code_valid(db, email_key, data.emailCode):
+        raise HTTPException(status_code=400, detail="验证码无效或已过期 / Verification code is invalid or expired")
+    if _INVALID_PWD_RE.search(data.newPassword):
+        raise HTTPException(status_code=400, detail="密码不能包含空格、<、>、引号 / Password cannot contain spaces, <, >, or quotes")
+    if len(data.newPassword) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
+    user.password = data.newPassword
+    db.commit()
+    delete_email_code(db, email_key)
+    send_password_changed_email(user.email, user.name)
+    return {"ok": True}
+
+# --- Games ---
+
+@app.get("/api/games", response_model=List[GameResponse])
+def get_all_games(db: Session = Depends(get_db)):
+    return db.query(models.Game).filter(
+        (models.Game.is_private == False) | (models.Game.is_private == None)
+    ).all()
+
+@app.get("/api/games/by_invite/{code}", response_model=GameResponse)
+def get_game_by_invite(code: str, db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(
+        models.Game.game_invite_code == code.upper().strip()
+    ).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game
+
+@app.post("/api/games", response_model=GameResponse, status_code=201)
+def create_game(game: GameCreate, db: Session = Depends(get_db)):
+    new_game = models.Game(
+        id=f"g_{uuid.uuid4().hex[:8]}",
+        creator_id=game.creatorId,
+        sport=game.sport,
+        time=game.time,
+        location=game.location,
+        age_group=game.ageGroup,
+        gender=game.gender,
+        deadline=game.deadline,
+        description=game.description,
+        contact_phone=game.contactPhone,
+        status="open",
+        home_group_id=game.homeGroupId,
+        volunteers=[],
+        is_private=game.isPrivate or False,
+        game_invite_code=(''.join(random.choices(string.ascii_uppercase + string.digits, k=8)) if game.isPrivate else None),
+    )
+    db.add(new_game)
+    db.commit()
+    db.refresh(new_game)
+    return new_game
+
+@app.put("/api/games/{game_id}", response_model=GameResponse)
+def update_game(game_id: str, game_data: GameUpdate, db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if game_data.time is not None:
+        game.time = game_data.time
+    if game_data.location is not None:
+        game.location = game_data.location
+    if game_data.ageGroup is not None:
+        game.age_group = game_data.ageGroup
+    if game_data.gender is not None:
+        game.gender = game_data.gender
+    if game_data.deadline is not None:
+        game.deadline = game_data.deadline
+    if game_data.description is not None:
+        game.description = game_data.description
+    if game_data.contactPhone is not None:
+        game.contact_phone = game_data.contactPhone
+    if game_data.opposingTeamId is not None:
+        game.opposing_team_id = game_data.opposingTeamId
+    if game_data.status is not None:
+        game.status = game_data.status
+    db.commit()
+    db.refresh(game)
+    return game
+
+@app.delete("/api/games/{game_id}", status_code=204)
+def delete_game(game_id: str, db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if game.status == "locked":
+        raise HTTPException(status_code=400, detail="Cannot delete a locked game")
+    db.query(models.MatchApplication).filter(models.MatchApplication.game_id == game_id).delete(synchronize_session=False)
+    db.query(models.RosterEntry).filter(models.RosterEntry.game_id == game_id).delete(synchronize_session=False)
+    db.delete(game)
+    db.commit()
+
+@app.put("/api/games/{game_id}/volunteers", response_model=GameResponse)
+def update_game_volunteers(game_id: str, action_data: VolunteerAction, db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    volunteers = list(game.volunteers or [])
+    if action_data.action == 'add' and action_data.volunteerId not in volunteers:
+        volunteers.append(action_data.volunteerId)
+    elif action_data.action == 'remove' and action_data.volunteerId in volunteers:
+        volunteers.remove(action_data.volunteerId)
+    game.volunteers = volunteers
+    db.commit()
+    db.refresh(game)
+    return game
+
+# --- Team Groups ---
+
+@app.get("/api/team_groups", response_model=List[TeamGroupResponse])
+def get_all_team_groups(
+    ageGroup: Optional[str] = None,
+    gender: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(models.TeamGroup)
+    if ageGroup:
+        q = q.filter(models.TeamGroup.age_group == ageGroup)
+    if gender:
+        q = q.filter(models.TeamGroup.gender == gender)
+    return q.all()
+
+@app.post("/api/team_groups", response_model=TeamGroupResponse, status_code=201)
+def create_team_group(group: TeamGroupCreate, db: Session = Depends(get_db)):
+    normalized_team_name = (group.teamName or "").strip()
+    if not normalized_team_name:
+        raise HTTPException(status_code=400, detail="队伍名称不能为空 / Team name is required")
+
+    is_top_level_team = not (group.ageGroup or "").strip()
+    if is_top_level_team:
+        existing_groups = db.query(models.TeamGroup).filter(
+            models.TeamGroup.coach_id == group.coachId
+        ).all()
+        for existing in existing_groups:
+            existing_team_name = (existing.team_name or "").strip().lower()
+            existing_age_group = (existing.age_group or "").strip()
+            if not existing_age_group and existing_team_name == normalized_team_name.lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail="同一教练下队伍名称不能重复 / Duplicate team name for this coach",
+                )
+
+    new_group = models.TeamGroup(
+        id=f"tg_{uuid.uuid4().hex[:8]}",
+        coach_id=group.coachId,
+        team_name=normalized_team_name,
+        age_group=group.ageGroup,
+        player_ids=group.playerIds or [],
+        invite_code=generate_unique_group_code(db),
+        gender=group.gender or None,
+        club_id=group.clubId or None,
+        sport=group.sport or None,
+    )
+    db.add(new_group)
+    db.commit()
+    db.refresh(new_group)
+    return new_group
+
+# NOTE: move_player must be declared BEFORE /{group_id} routes to avoid path conflicts
+@app.post("/api/team_groups/move_player")
+def move_player_between_groups(data: MovePlayerRequest, db: Session = Depends(get_db)):
+    from_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == data.fromGroup).first()
+    to_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == data.toGroup).first()
+    if not from_group or not to_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    from_ids = list(from_group.player_ids or [])
+    to_ids = list(to_group.player_ids or [])
+    if data.playerId in from_ids:
+        from_ids.remove(data.playerId)
+    if data.playerId not in to_ids:
+        to_ids.append(data.playerId)
+    from_group.player_ids = from_ids
+    to_group.player_ids = to_ids
+    db.commit()
+    return {"message": "Player moved successfully"}
+
+@app.post("/api/team_groups/join_by_invite", response_model=TeamGroupResponse)
+def join_team_group_by_invite(data: JoinTeamByInviteRequest, db: Session = Depends(get_db)):
+    code = data.inviteCode.upper().strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="邀请码不能为空 / Invite code is required")
+
+    player = db.query(models.User).filter(models.User.id == data.playerId).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="球员不存在 / Player not found")
+    if player.role != 'player':
+        raise HTTPException(status_code=400, detail="仅球员可加入队伍 / Only players can join teams")
+
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="邀请码无效 / Invalid invite code")
+
+    player_ids = list(group.player_ids or [])
+    if data.playerId not in player_ids:
+        player_ids.append(data.playerId)
+        group.player_ids = player_ids
+        db.add(models.Notification(
+            id=f"n_{uuid.uuid4().hex[:12]}",
+            target_user_id=group.coach_id,
+            title="👥 新球员加入分组 / New Player Joined",
+            body=f"{player.name} joined your team {group.team_name}.",
+            read=False,
+            ts=datetime.utcnow().isoformat(),
+        ))
+        db.commit()
+    db.refresh(group)
+    return group
+
+@app.get("/api/team_groups/{group_id}/invite_code")
+def get_group_invite_code(group_id: str, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if not group.invite_code:
+        group.invite_code = generate_unique_group_code(db)
+        db.commit()
+    return {"code": group.invite_code, "group_id": group.id, "group_name": group.name}
+
+@app.put("/api/team_groups/{group_id}", response_model=TeamGroupResponse)
+def update_team_group(group_id: str, data: TeamGroupUpdate, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    group.team_name = data.teamName
+    group.age_group = data.ageGroup
+    group.gender = data.gender if data.gender is not None else group.gender
+    group.club_id = data.clubId if data.clubId is not None else group.club_id
+    if data.sport is not None:
+        group.sport = data.sport or None
+    db.commit()
+    db.refresh(group)
+    return group
+
+@app.delete("/api/team_groups/{group_id}", status_code=204)
+def delete_team_group(group_id: str, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    db.delete(group)
+    db.commit()
+
+@app.post("/api/team_groups/{group_id}/players", response_model=TeamGroupResponse)
+def add_player_to_group(group_id: str, data: PlayerAction, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    player_ids = list(group.player_ids or [])
+    if data.playerId not in player_ids:
+        player_ids.append(data.playerId)
+    group.player_ids = player_ids
+    db.commit()
+    db.refresh(group)
+    return group
+
+@app.post("/api/team_groups/{group_id}/remove_player", response_model=TeamGroupResponse)
+def remove_player_from_group(group_id: str, data: PlayerAction, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    player_ids = list(group.player_ids or [])
+    if data.playerId in player_ids:
+        player_ids.remove(data.playerId)
+    group.player_ids = player_ids
+    db.commit()
+    db.refresh(group)
+    return group
+
+@app.post("/api/team_groups/{group_id}/offline_players", response_model=OfflinePlayerResponse, status_code=201)
+def add_offline_player(group_id: str, data: OfflinePlayerCreate, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    players = list(group.offline_players or [])
+    new_player = {
+        "id": f"op_{uuid.uuid4().hex[:8]}",
+        "name": data.name.strip(),
+        "bind_code": generate_unique_offline_bind_code(db),
+    }
+    players.append(new_player)
+    group.offline_players = players
+    db.commit()
+    return new_player
+
+@app.delete("/api/team_groups/{group_id}/offline_players/{player_id}", status_code=204)
+def remove_offline_player(group_id: str, player_id: str, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    players = list(group.offline_players or [])
+    group.offline_players = [p for p in players if p.get("id") != player_id]
+    db.commit()
+
+# --- Clubs ---
+
+@app.get("/api/clubs", response_model=List[ClubResponse])
+def get_clubs(coachId: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(models.Club)
+    if coachId:
+        q = q.filter(models.Club.coach_id == coachId)
+    return q.all()
+
+@app.post("/api/clubs", response_model=ClubResponse, status_code=201)
+def create_club(club: ClubCreate, db: Session = Depends(get_db)):
+    new_club = models.Club(
+        id=f"cl_{uuid.uuid4().hex[:8]}",
+        coach_id=club.coachId,
+        name=club.name.strip(),
+    )
+    db.add(new_club)
+    db.commit()
+    db.refresh(new_club)
+    return new_club
+
+@app.delete("/api/clubs/{club_id}", status_code=204)
+def delete_club(club_id: str, db: Session = Depends(get_db)):
+    club = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found")
+    # Unlink teams from this club
+    db.query(models.TeamGroup).filter(models.TeamGroup.club_id == club_id).update({"club_id": None})
+    db.delete(club)
+    db.commit()
+
+# --- Match Applications ---
+
+@app.get("/api/match_applications", response_model=List[MatchApplicationResponse])
+def get_all_match_applications(db: Session = Depends(get_db)):
+    return db.query(models.MatchApplication).all()
+
+@app.post("/api/match_applications", response_model=MatchApplicationResponse, status_code=201)
+def create_match_application(app_data: MatchApplicationCreate, db: Session = Depends(get_db)):
+    existing = db.query(models.MatchApplication).filter(
+        models.MatchApplication.game_id == app_data.gameId,
+        models.MatchApplication.applicant_coach_id == app_data.applicantCoachId,
+    ).first()
+    if existing:
+        return existing
+    new_app = models.MatchApplication(
+        id=f"ma_{uuid.uuid4().hex[:8]}",
+        game_id=app_data.gameId,
+        applicant_coach_id=app_data.applicantCoachId,
+        applicant_group_id=app_data.applicantGroupId or None,
+        status=app_data.status or 'pending',
+    )
+    db.add(new_app)
+
+    # Notify game owner that a new opponent application has arrived.
+    game = db.query(models.Game).filter(models.Game.id == app_data.gameId).first()
+    applicant = db.query(models.User).filter(models.User.id == app_data.applicantCoachId).first()
+    applicant_group = None
+    if app_data.applicantGroupId:
+        applicant_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == app_data.applicantGroupId).first()
+
+    if game and game.creator_id and game.creator_id != app_data.applicantCoachId:
+        game_label = f"{game.sport} @ {game.location} ({game.time})"
+        applicant_name = applicant.name if applicant else "A coach"
+        team_name = applicant_group.team_name if applicant_group else "Unknown team"
+        age_gender = f"{(applicant_group.age_group or '—')} / {(applicant_group.gender or '—')}" if applicant_group else "— / —"
+        db.add(models.Notification(
+            id=f"n_{uuid.uuid4().hex[:12]}",
+            target_user_id=game.creator_id,
+            title="📥 新对战申请 / New Match Application",
+            body=f"{applicant_name} applied to your game \"{game_label}\" with team {team_name} ({age_gender}).",
+            read=False,
+            ts=datetime.utcnow().isoformat(),
+        ))
+
+    db.commit()
+    db.refresh(new_app)
+    return new_app
+
+@app.put("/api/match_applications/{app_id}/status", response_model=MatchApplicationResponse)
+def update_match_application_status(app_id: str, data: MatchApplicationStatusUpdate, db: Session = Depends(get_db)):
+    application = db.query(models.MatchApplication).filter(models.MatchApplication.id == app_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    application.status = data.status
+
+    # Auto-invite players from both teams when application is accepted
+    if data.status == 'accepted':
+        game = db.query(models.Game).filter(models.Game.id == application.game_id).first()
+        player_ids_to_invite: set = set()
+
+        if game and game.home_group_id:
+            home_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == game.home_group_id).first()
+            if home_group:
+                player_ids_to_invite.update(home_group.player_ids or [])
+
+        if application.applicant_group_id:
+            away_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == application.applicant_group_id).first()
+            if away_group:
+                player_ids_to_invite.update(away_group.player_ids or [])
+
+        # Record the opposing team's group on the game itself
+        if game and application.applicant_group_id:
+            game.opposing_group_id = application.applicant_group_id
+
+        ts_now = datetime.utcnow().isoformat()
+        game_label = f"{game.sport} @ {game.location} ({game.time})" if game else "比赛"
+        for pid in player_ids_to_invite:
+            exists = db.query(models.Roster).filter(
+                models.Roster.game_id == application.game_id,
+                models.Roster.player_id == pid,
+            ).first()
+            if not exists:
+                db.add(models.Roster(
+                    id=f"r_{uuid.uuid4().hex[:8]}",
+                    game_id=application.game_id,
+                    player_id=pid,
+                    status='invited',
+                    guardian_approved=False,
+                ))
+                db.add(models.Notification(
+                    id=f"n_{uuid.uuid4().hex[:12]}",
+                    target_user_id=pid,
+                    title="🏅 比赛邀请 / Game Invitation",
+                    body=f"您已被邀请参加「{game_label}」/ You have been invited to \"{game_label}\".",
+                    read=False,
+                    ts=ts_now,
+                ))
+
+    db.commit()
+    db.refresh(application)
+    return application
+
+@app.delete("/api/match_applications/{app_id}", status_code=204)
+def delete_match_application(app_id: str, db: Session = Depends(get_db)):
+    application = db.query(models.MatchApplication).filter(models.MatchApplication.id == app_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    db.delete(application)
+    db.commit()
+
+# --- Rosters ---
+
+@app.get("/api/rosters", response_model=List[RosterResponse])
+def get_all_rosters(db: Session = Depends(get_db)):
+    return db.query(models.Roster).all()
+
+@app.post("/api/rosters/batch", response_model=List[RosterResponse], status_code=201)
+def batch_create_rosters(rosters: List[RosterCreate], db: Session = Depends(get_db)):
+    created = []
+    for r in rosters:
+        existing = db.query(models.Roster).filter(
+            models.Roster.game_id == r.gameId,
+            models.Roster.player_id == r.playerId,
+        ).first()
+        if existing:
+            created.append(existing)
+            continue
+        new_roster = models.Roster(
+            id=f"r_{uuid.uuid4().hex[:8]}",
+            game_id=r.gameId,
+            player_id=r.playerId,
+            status=r.status or 'invited',
+            guardian_approved=False,
+        )
+        db.add(new_roster)
+        created.append(new_roster)
+    db.commit()
+    for r in created:
+        db.refresh(r)
+    return created
+
+@app.put("/api/rosters/{roster_id}/status", response_model=RosterResponse)
+def update_roster_status(roster_id: str, status_data: RosterStatusUpdate, db: Session = Depends(get_db)):
+    roster = db.query(models.Roster).filter(models.Roster.id == roster_id).first()
+    if not roster:
+        raise HTTPException(status_code=404, detail="Roster entry not found")
+
+    # Players who withdrew are locked in non-participating state.
+    if roster.status == "withdrawn" and status_data.status != "withdrawn":
+        raise HTTPException(status_code=400, detail="Withdrawn roster entry is locked")
+
+    roster.status = status_data.status
+    if status_data.guardian_approved is not None:
+        roster.guardian_approved = status_data.guardian_approved
+    if status_data.withdraw_reason is not None:
+        roster.withdraw_reason = status_data.withdraw_reason
+    elif status_data.status != "withdrawn":
+        roster.withdraw_reason = None
+    db.commit()
+    db.refresh(roster)
+    return roster
+
+# --- Settings ---
+
+@app.get("/api/settings", response_model=SettingsResponse)
+def get_settings(db: Session = Depends(get_db)):
+    settings = db.query(models.Settings).filter(models.Settings.id == 1).first()
+    if not settings:
+        settings = models.Settings(id=1, underage_limit=16)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+@app.put("/api/settings", response_model=SettingsResponse)
+def update_settings(data: SettingsUpdate, db: Session = Depends(get_db)):
+    settings = db.query(models.Settings).filter(models.Settings.id == 1).first()
+    if not settings:
+        settings = models.Settings(id=1, underage_limit=data.underageLimit)
+        db.add(settings)
+    else:
+        settings.underage_limit = data.underageLimit
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+# --- Notifications ---
+
+class NotificationCreate(BaseModel):
+    targetUserId: str
+    title: str
+    body: str
+
+class NotificationResponse(BaseModel):
+    id: str
+    target_user_id: str
+    title: str
+    body: str
+    read: bool
+    ts: str
+    class Config:
+        from_attributes = True
+
+@app.post("/api/notifications", response_model=NotificationResponse, status_code=201)
+def create_notification(data: NotificationCreate, db: Session = Depends(get_db)):
+    notif = models.Notification(
+        id=f"n_{uuid.uuid4().hex[:12]}",
+        target_user_id=data.targetUserId,
+        title=data.title,
+        body=data.body,
+        read=False,
+        ts=datetime.utcnow().isoformat(),
+    )
+    db.add(notif)
+    db.commit()
+    db.refresh(notif)
+    return notif
+
+@app.get("/api/notifications/{user_id}", response_model=List[NotificationResponse])
+def get_notifications(user_id: str, db: Session = Depends(get_db)):
+    return (
+        db.query(models.Notification)
+        .filter(models.Notification.target_user_id == user_id)
+        .order_by(models.Notification.ts.desc())
+        .all()
+    )
+
+@app.put("/api/notifications/{user_id}/read_all", status_code=204)
+def mark_all_notifications_read(user_id: str, db: Session = Depends(get_db)):
+    db.query(models.Notification).filter(
+        models.Notification.target_user_id == user_id,
+        models.Notification.read == False,
+    ).update({"read": True})
+    db.commit()
+
+# --- Root ---
+
+@app.get("/")
+def read_root():
+    return {"message": "Team Matcher API is running. Visit /docs for Swagger UI."}
+

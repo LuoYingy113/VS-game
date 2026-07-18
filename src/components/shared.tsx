@@ -3,9 +3,10 @@
  * NavBtn / Toast / Modal / LoadingScreen / ErrorScreen / DatePickerField / LangSwitcher
  */
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
     Platform,
     Pressable,
     Modal as RNModal,
@@ -113,19 +114,24 @@ export function AppModal({ modal, onClose }: AppModalProps) {
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={() => {}}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{modal?.title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <Text style={styles.modalClose}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {modal?.content}
-          </ScrollView>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <Pressable style={styles.modalOverlay} onPress={onClose}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{modal?.title}</Text>
+              <TouchableOpacity onPress={onClose} hitSlop={8}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {modal?.content}
+            </ScrollView>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </RNModal>
   );
 }
@@ -222,86 +228,6 @@ export function LangSwitcher() {
 // ==========================================
 // 滚轮选择器 (Drum-roll Wheel Picker)
 // ==========================================
-const WHEEL_ITEM_H = 44;
-
-function WheelPicker({
-  items,
-  selectedValue,
-  onValueChange,
-}: {
-  items: { label: string; value: number }[];
-  selectedValue: number;
-  onValueChange: (v: number) => void;
-}) {
-  const ref = useRef<ScrollView>(null);
-
-  useEffect(() => {
-    const idx = items.findIndex((i) => i.value === selectedValue);
-    if (idx >= 0) {
-      setTimeout(() => {
-        ref.current?.scrollTo({ y: idx * WHEEL_ITEM_H, animated: false });
-      }, 80);
-    }
-  }, []);
-
-  const handleScrollEnd = (e: any) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.y / WHEEL_ITEM_H);
-    const clamped = Math.max(0, Math.min(idx, items.length - 1));
-    onValueChange(items[clamped].value);
-  };
-
-  return (
-    <View style={wStyles.container}>
-      <View style={wStyles.highlight} pointerEvents="none" />
-      <ScrollView
-        ref={ref}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={WHEEL_ITEM_H}
-        decelerationRate="fast"
-        contentContainerStyle={{ paddingVertical: WHEEL_ITEM_H * 2 }}
-        onMomentumScrollEnd={handleScrollEnd}
-        onScrollEndDrag={handleScrollEnd}
-      >
-        {items.map((item, i) => (
-          <View key={i} style={wStyles.item}>
-            <Text
-              style={[
-                wStyles.itemText,
-                item.value === selectedValue && wStyles.itemTextActive,
-              ]}
-            >
-              {item.label}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-const wStyles = StyleSheet.create({
-  container: { height: WHEEL_ITEM_H * 5, width: 62, overflow: "hidden" },
-  highlight: {
-    position: "absolute",
-    top: WHEEL_ITEM_H * 2,
-    left: 0,
-    right: 0,
-    height: WHEEL_ITEM_H,
-    borderTopWidth: 1.5,
-    borderBottomWidth: 1.5,
-    borderColor: C.blue,
-    backgroundColor: "#eff6ff",
-    zIndex: 1,
-  },
-  item: {
-    height: WHEEL_ITEM_H,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  itemText: { fontSize: 17, color: C.slate400 },
-  itemTextActive: { fontSize: 22, fontWeight: "bold", color: C.blue },
-});
-
 // ==========================================
 // 日历日期选择器 (Calendar Date Picker — replaces native spinner)
 // ==========================================
@@ -311,12 +237,14 @@ export function DatePickerField({
   onChange,
   mode = "date",
   inputStyle,
+  allowPast = false,
 }: {
   label?: string;
   value: string;
   onChange: (iso: string) => void;
   mode?: "date" | "datetime";
   inputStyle?: object;
+  allowPast?: boolean;
 }) {
   const { t, lang } = useLanguage();
 
@@ -372,8 +300,13 @@ export function DatePickerField({
       : null,
   );
   const [selHour, setSelHour] = useState(parsed ? parsed.getHours() : 10);
-  const [selMinute, setSelMinute] = useState(
-    parsed ? (Math.round(parsed.getMinutes() / 5) * 5) % 60 : 0,
+  const [selMinute, setSelMinute] = useState(parsed ? parsed.getMinutes() : 0);
+  // Display strings for the text inputs — updated freely while typing, padded on blur
+  const [hourText, setHourText] = useState(
+    pad(parsed ? parsed.getHours() : 10),
+  );
+  const [minuteText, setMinuteText] = useState(
+    pad(parsed ? parsed.getMinutes() : 0),
   );
 
   const prevMonth = () => {
@@ -406,6 +339,7 @@ export function DatePickerField({
   while (cells.length % 7 !== 0) cells.push(null);
 
   const isDisabled = (day: number) => {
+    if (allowPast) return false;
     const d = new Date(viewYear, viewMonth, day);
     d.setHours(0, 0, 0, 0);
     return d < today;
@@ -427,7 +361,11 @@ export function DatePickerField({
   const confirm = () => {
     if (!selDate) return;
     const final = new Date(selDate);
-    if (mode === "datetime") final.setHours(selHour, selMinute, 0, 0);
+    if (mode === "datetime") {
+      const h = Math.min(23, Math.max(0, parseInt(hourText, 10) || 0));
+      const m = Math.min(59, Math.max(0, parseInt(minuteText, 10) || 0));
+      final.setHours(h, m, 0, 0);
+    }
     onChange(formatISO(final));
     setOpen(false);
   };
@@ -484,135 +422,158 @@ export function DatePickerField({
         animationType="slide"
         onRequestClose={() => setOpen(false)}
       >
-        <Pressable style={calStyles.overlay} onPress={() => setOpen(false)}>
-          <Pressable style={calStyles.sheet} onPress={() => {}}>
-            {/* Handle bar */}
-            <View style={calStyles.handle} />
+        <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+          <Pressable style={calStyles.overlay} onPress={() => setOpen(false)}>
+            <Pressable style={calStyles.sheet} onPress={() => {}}>
+              {/* Handle bar */}
+              <View style={calStyles.handle} />
 
-            {/* Title */}
-            <Text style={calStyles.title}>
-              {mode === "datetime" ? t("calTitle") : t("calTitleDate")}
-            </Text>
+              {/* Title */}
+              <Text style={calStyles.title}>
+                {mode === "datetime" ? t("calTitle") : t("calTitleDate")}
+              </Text>
 
-            {/* Month navigation */}
-            <View style={calStyles.monthRow}>
-              <TouchableOpacity onPress={prevMonth} style={calStyles.navBtn}>
-                {/* @ts-ignore */}
-                <ChevronLeft size={20} color={C.slate700} />
-              </TouchableOpacity>
-              <Text style={calStyles.monthText}>{monthName}</Text>
-              <TouchableOpacity onPress={nextMonth} style={calStyles.navBtn}>
-                {/* @ts-ignore */}
-                <ChevronRight size={20} color={C.slate700} />
-              </TouchableOpacity>
-            </View>
+              {/* Month navigation */}
+              <View style={calStyles.monthRow}>
+                <TouchableOpacity onPress={prevMonth} style={calStyles.navBtn}>
+                  {/* @ts-ignore */}
+                  <ChevronLeft size={20} color={C.slate700} />
+                </TouchableOpacity>
+                <Text style={calStyles.monthText}>{monthName}</Text>
+                <TouchableOpacity onPress={nextMonth} style={calStyles.navBtn}>
+                  {/* @ts-ignore */}
+                  <ChevronRight size={20} color={C.slate700} />
+                </TouchableOpacity>
+              </View>
 
-            {/* Day headers */}
-            <View style={calStyles.weekRow}>
-              {dayHeaders.map((d, i) => (
-                <Text key={i} style={calStyles.weekDay}>
-                  {d}
-                </Text>
-              ))}
-            </View>
+              {/* Day headers */}
+              <View style={calStyles.weekRow}>
+                {dayHeaders.map((d, i) => (
+                  <Text key={i} style={calStyles.weekDay}>
+                    {d}
+                  </Text>
+                ))}
+              </View>
 
-            {/* Calendar cells */}
-            <View style={calStyles.grid}>
-              {cells.map((day, i) => {
-                if (!day) return <View key={i} style={calStyles.cell} />;
-                const disabled = isDisabled(day);
-                const selected = isSelected(day);
-                const todayMark = isToday(day);
-                return (
-                  <TouchableOpacity
-                    key={i}
-                    style={[
-                      calStyles.cell,
-                      selected && calStyles.cellSelected,
-                      !selected && todayMark && calStyles.cellToday,
-                      disabled && calStyles.cellDisabled,
-                    ]}
-                    onPress={() =>
-                      !disabled &&
-                      setSelDate(new Date(viewYear, viewMonth, day))
-                    }
-                    activeOpacity={disabled ? 1 : 0.7}
-                  >
-                    <Text
+              {/* Calendar cells */}
+              <View style={calStyles.grid}>
+                {cells.map((day, i) => {
+                  if (!day) return <View key={i} style={calStyles.cell} />;
+                  const disabled = isDisabled(day);
+                  const selected = isSelected(day);
+                  const todayMark = isToday(day);
+                  return (
+                    <TouchableOpacity
+                      key={i}
                       style={[
-                        calStyles.cellText,
-                        selected && calStyles.cellTextSelected,
-                        disabled && calStyles.cellTextDisabled,
-                        todayMark && !selected && calStyles.cellTextToday,
+                        calStyles.cell,
+                        selected && calStyles.cellSelected,
+                        !selected && todayMark && calStyles.cellToday,
+                        disabled && calStyles.cellDisabled,
                       ]}
+                      onPress={() =>
+                        !disabled &&
+                        setSelDate(new Date(viewYear, viewMonth, day))
+                      }
+                      activeOpacity={disabled ? 1 : 0.7}
                     >
-                      {day}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                      <Text
+                        style={[
+                          calStyles.cellText,
+                          selected && calStyles.cellTextSelected,
+                          disabled && calStyles.cellTextDisabled,
+                          todayMark && !selected && calStyles.cellTextToday,
+                        ]}
+                      >
+                        {day}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-            {/* Time picker (datetime mode only) */}
-            {mode === "datetime" && (
-              <View style={calStyles.timeRow}>
-                <Text style={calStyles.timeLabel}>{t("calTime")}</Text>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    gap: 4,
-                    marginTop: 8,
-                  }}
-                >
-                  <WheelPicker
-                    items={Array.from({ length: 24 }, (_, h) => ({
-                      label: pad(h),
-                      value: h,
-                    }))}
-                    selectedValue={selHour}
-                    onValueChange={setSelHour}
-                  />
-                  <Text
+              {/* Time picker (datetime mode only) */}
+              {mode === "datetime" && (
+                <View style={calStyles.timeRow}>
+                  <Text style={calStyles.timeLabel}>{t("calTime")}</Text>
+                  <View
                     style={{
-                      fontSize: 28,
-                      fontWeight: "bold",
-                      color: C.slate700,
-                      marginBottom: 2,
+                      flexDirection: "row",
+                      justifyContent: "center",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 12,
                     }}
                   >
-                    :
-                  </Text>
-                  <WheelPicker
-                    items={[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(
-                      (m) => ({ label: pad(m), value: m }),
-                    )}
-                    selectedValue={selMinute}
-                    onValueChange={setSelMinute}
-                  />
+                    <TextInput
+                      style={calStyles.timeInput}
+                      value={hourText}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      selectTextOnFocus
+                      onChangeText={(v) => {
+                        // Allow empty or digits while typing
+                        if (v === "" || /^\d{1,2}$/.test(v)) setHourText(v);
+                      }}
+                      onBlur={() => {
+                        const n = parseInt(hourText, 10);
+                        const clamped = isNaN(n)
+                          ? 0
+                          : Math.min(23, Math.max(0, n));
+                        setSelHour(clamped);
+                        setHourText(pad(clamped));
+                      }}
+                    />
+                    <Text
+                      style={{
+                        fontSize: 28,
+                        fontWeight: "bold",
+                        color: C.slate700,
+                      }}
+                    >
+                      :
+                    </Text>
+                    <TextInput
+                      style={calStyles.timeInput}
+                      value={minuteText}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      selectTextOnFocus
+                      onChangeText={(v) => {
+                        if (v === "" || /^\d{1,2}$/.test(v)) setMinuteText(v);
+                      }}
+                      onBlur={() => {
+                        const n = parseInt(minuteText, 10);
+                        const clamped = isNaN(n)
+                          ? 0
+                          : Math.min(59, Math.max(0, n));
+                        setSelMinute(clamped);
+                        setMinuteText(pad(clamped));
+                      }}
+                    />
+                  </View>
                 </View>
-              </View>
-            )}
+              )}
 
-            {/* Confirm / Cancel */}
-            <View style={calStyles.actions}>
-              <TouchableOpacity
-                style={calStyles.cancelBtn}
-                onPress={() => setOpen(false)}
-              >
-                <Text style={calStyles.cancelText}>{t("calCancel")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[calStyles.confirmBtn, !selDate && { opacity: 0.4 }]}
-                onPress={confirm}
-                disabled={!selDate}
-              >
-                <Text style={calStyles.confirmText}>{t("calConfirm")}</Text>
-              </TouchableOpacity>
-            </View>
+              {/* Confirm / Cancel */}
+              <View style={calStyles.actions}>
+                <TouchableOpacity
+                  style={calStyles.cancelBtn}
+                  onPress={() => setOpen(false)}
+                >
+                  <Text style={calStyles.cancelText}>{t("calCancel")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[calStyles.confirmBtn, !selDate && { opacity: 0.4 }]}
+                  onPress={confirm}
+                  disabled={!selDate}
+                >
+                  <Text style={calStyles.confirmText}>{t("calConfirm")}</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
+        </KeyboardAvoidingView>
       </RNModal>
     </View>
   );
@@ -729,6 +690,18 @@ const calStyles = StyleSheet.create({
     color: C.slate700,
     marginBottom: 8,
   },
+  timeInput: {
+    width: 64,
+    height: 52,
+    borderWidth: 1.5,
+    borderColor: C.slate300,
+    borderRadius: 12,
+    backgroundColor: C.white,
+    fontSize: 28,
+    fontWeight: "600",
+    color: C.slate800,
+    textAlign: "center",
+  },
   timePill: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -789,6 +762,7 @@ const styles = StyleSheet.create({
   navLabel: {
     fontSize: 11,
     color: C.slate400,
+    textAlign: "center",
   },
   navLabelActive: {
     color: C.blue,

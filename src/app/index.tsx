@@ -2,46 +2,49 @@
  * Team Matcher — Main App Entry
  * 主应用入口: 状态管理、登录守卫、角色路由、通知轮询
  */
-import { Bell, LogOut } from "lucide-react-native";
-import React, { useCallback, useEffect, useState } from "react";
+import { Bell, LogOut, RotateCw } from "lucide-react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Animated,
+  Easing,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 import { loadAllData } from "../api";
 import {
-    clearLoggedInUserId,
-    getLoggedInUserId,
-    getNotificationsForUser,
-    getSentGameNotifs,
-    markAllRead,
-    saveLoggedInUserId,
-    saveSentGameNotifs,
-    sendAppNotification,
+  clearLoggedInUserId,
+  getLoggedInUserId,
+  getNotificationsForUser,
+  getSentGameNotifs,
+  markAllRead,
+  saveLoggedInUserId,
+  saveSentGameNotifs,
+  sendAppNotification,
 } from "../storage";
 import {
-    AdminSettings,
-    AppNotification,
-    Game,
-    MatchApplication,
-    RosterEntry,
-    TeamGroup,
-    User,
+  AdminSettings,
+  AppNotification,
+  Club,
+  Game,
+  MatchApplication,
+  RosterEntry,
+  TeamGroup,
+  User,
 } from "../types";
 
 import {
-    C,
-    ErrorScreen,
-    LangSwitcher,
-    LoadingScreen,
-    Toast,
+  C,
+  ErrorScreen,
+  LangSwitcher,
+  LoadingScreen,
+  Toast,
 } from "../components/shared";
 import { LanguageProvider, useLanguage } from "../i18n";
 import AdminScreen from "../screens/AdminScreen";
@@ -94,11 +97,65 @@ export default function App() {
   const [adminSettings, setAdminSettings] = useState<AdminSettings>({
     underageLimit: 16,
   });
+  const [clubs, setClubs] = useState<Club[]>([]);
 
   const [toast, setToast] = useState<string | null>(null);
+  const [coachProfileOpen, setCoachProfileOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inbox, setInbox] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const hasUnreadMatchApplicationNotif = inbox.some(
+    (n) =>
+      !n.read &&
+      (n.title.includes("New Match Application") ||
+        n.title.includes("新对战申请")),
+  );
+
+  // Spin animation for refresh button
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const spinLoop = useRef<Animated.CompositeAnimation | null>(null);
+  const startSpin = () => {
+    spinAnim.setValue(0);
+    spinLoop.current = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 700,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    spinLoop.current.start();
+  };
+  const stopSpin = () => {
+    spinLoop.current?.stop();
+    spinAnim.setValue(0);
+  };
+  const spinDeg = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    startSpin();
+    try {
+      const data = await loadAllData();
+      setUsers(data.users);
+      setGames(data.games);
+      setTeamGroups(data.teamGroups);
+      setMatchApplications(data.matchApplications);
+      setRosters(data.rosters);
+      setAdminSettings(data.adminSettings);
+      setClubs(data.clubs);
+    } catch {
+      // ignore
+    } finally {
+      stopSpin();
+      setRefreshing(false);
+    }
+  };
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -119,6 +176,7 @@ export default function App() {
         setMatchApplications(data.matchApplications);
         setRosters(data.rosters);
         setAdminSettings(data.adminSettings);
+        setClubs(data.clubs);
         setIsLoading(false);
         return;
       } catch (err: any) {
@@ -160,6 +218,7 @@ export default function App() {
       setMatchApplications(data.matchApplications);
       setRosters(data.rosters);
       setAdminSettings(data.adminSettings);
+      setClubs(data.clubs);
     } catch {
       // ignore — already have data from initial load
     }
@@ -265,6 +324,7 @@ export default function App() {
 
   const sharedState = {
     currentUser: currentUser!,
+    setCurrentUser,
     users,
     setUsers,
     games,
@@ -277,8 +337,13 @@ export default function App() {
     setRosters,
     adminSettings,
     setAdminSettings,
+    clubs,
+    setClubs,
     showToast,
     sendAppNotification,
+    coachProfileOpen,
+    setCoachProfileOpen,
+    hasUnreadMatchApplicationNotif,
   };
 
   if (isLoading)
@@ -307,14 +372,32 @@ export default function App() {
 
         {/* ---- Header ---- */}
         <View style={styles.header}>
-          <View>
+          <TouchableOpacity
+            onPress={() =>
+              currentUser.role === "coach" && setCoachProfileOpen(true)
+            }
+            activeOpacity={currentUser.role === "coach" ? 0.6 : 1}
+          >
             <Text style={styles.headerName}>{currentUser.name}</Text>
             <Text style={styles.headerRole}>
               {currentUser.role.toUpperCase()}
+              {currentUser.role === "coach" && (
+                <Text style={{ fontSize: 11, color: "#3b82f6" }}> ✎</Text>
+              )}
             </Text>
-          </View>
+          </TouchableOpacity>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <LangSwitcher />
+            <TouchableOpacity
+              style={styles.headerBtn}
+              onPress={handleRefresh}
+              disabled={refreshing}
+            >
+              <Animated.View style={{ transform: [{ rotate: spinDeg }] }}>
+                {/* @ts-ignore */}
+                <RotateCw size={20} color={refreshing ? C.blue : C.slate400} />
+              </Animated.View>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.headerBtn}
               onPress={async () => {
@@ -425,7 +508,7 @@ const styles = StyleSheet.create({
     backgroundColor: C.white,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: C.slate200,
+    borderColor: C.slate300,
     shadowColor: "#000",
     shadowOpacity: 0.15,
     shadowRadius: 16,
@@ -439,7 +522,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 14,
     borderBottomWidth: 1,
-    borderColor: C.slate200,
+    borderColor: C.slate300,
   },
   inboxTitle: { fontSize: 14, fontWeight: "bold", color: C.slate800 },
   inboxEmpty: {
@@ -448,7 +531,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     padding: 20,
   },
-  inboxItem: { padding: 12, borderBottomWidth: 1, borderColor: C.slate100 },
+  inboxItem: { padding: 12, borderBottomWidth: 1, borderColor: C.slate200 },
   inboxItemTitle: { fontSize: 13, fontWeight: "600", color: C.slate800 },
   inboxItemBody: { fontSize: 12, color: C.slate500, marginTop: 2 },
   inboxItemTime: { fontSize: 10, color: C.slate300, marginTop: 4 },
