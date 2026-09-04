@@ -8,9 +8,16 @@ npx expo start --dev-client --lan --clear
 
 # Tunnel fallback when LAN cannot connect
 CI=1 npx expo start --go --tunnel --clear
+# NOTE: In CI=1 (non-interactive), DO NOT add --ios/--android.
+# Use QR in Expo Go to choose platform. --ios may trigger Xcode prompt and fail.
+# If you want to force platform, run WITHOUT CI:
+npx expo start --go --tunnel --clear --ios
+npx expo start --go --tunnel --clear --android
 
 # Tunnel without login prompt (skip account check + disable interactive prompt)
 EXPO_OFFLINE=1 CI=1 npx expo start --go --tunnel --clear
+EXPO_OFFLINE=1 npx expo start --go --tunnel --clear --ios
+EXPO_OFFLINE=1 npx expo start --go --tunnel --clear --android
 
 # Switch mode in running Expo terminal
 # press s -> Expo Go

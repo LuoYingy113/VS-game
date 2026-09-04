@@ -13,13 +13,10 @@ const translations = {
     calSelectDate: "Select date and time...",
     calSelectDateOnly: "Select date...",
     calChange: "Change",
-    calTitle: "Select Date & Time",
     calTitleDate: "Select Date",
-    calTime: "Time",
     calConfirm: "Confirm",
     calCancel: "Cancel",
-    calDays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
-    langEn: "English",
+    calDays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     langZh: "中文",
     langEl: "Ελληνικά",
 
@@ -28,38 +25,36 @@ const translations = {
     copied: "✓ Copied!",
     copyFail: "Cannot copy",
     save: "Save",
-    loading: "Loading…",
+    loading: "Loading...",
     pwdShow: "Show",
     pwdHide: "Hide",
-
-    // Login / Register
     loginSubtitleSignin: "Sign in to your account",
     loginSubtitleRegister: "Registration (Invite Code Required)",
     tabSignin: "Sign In",
     tabRegister: "Register",
+    btnSignin: "Sign In",
+    pwdHint: "At least 6 characters, no spaces, <, >, quotes",
     labelEmail: "Email",
+    labelPhone: "Phone Number",
     registerEmailNote: "(Used for login, unique)",
     labelPassword: "Password",
     labelFullName: "Full Name",
     labelDob: "Date of Birth",
     dobYearPlaceholder: "Year",
-    dobMonthPlaceholder: "Mo",
+    dobMonthPlaceholder: "MM",
     dobDayPlaceholder: "Day",
-    btnSignin: "Sign In",
     btnRegister: "Register",
-    demoTitle: "Demo accounts",
     playerRole: "Player",
     coachRole: "Coach",
-    pwdHint: "Min 6 chars, no spaces or quotes",
     guardianAccountTitle: "👨‍👩‍👦 Guardian Account",
     guardianAccountHint:
       "Guardian can log in to approve your child's game participation",
     labelGuardianName: "Guardian Name",
     labelGuardianEmail: "Guardian Email",
+    labelGuardianEmailCode: "Guardian Email Verification Code",
     labelGuardianPwd: "Guardian Password",
     guardianPwdHint: "Min 6 chars",
-    labelPhone: "Phone Number",
-    labelDefaultClub: "Default Club (Optional)",
+    hintGuardianEmailCode: "Enter the 6-digit code sent to the guardian email",
     labelCoachRegCode: "Coach Register Code",
     labelPlayerInviteCode: "Coach Invite Code",
     hintCoachCode: "Request from admin",
@@ -99,8 +94,12 @@ const translations = {
       "Guardian password cannot contain spaces, <, >, quotes",
     errGuardianPwdTooShort: "Guardian password must be at least 6 characters",
     errGuardianRequired: "Guardian info required for players under {limit}",
+    errGuardianCodeRequired:
+      "Please request and enter the guardian email verification code",
     ageDisplay: "Age: {age}",
     underageWarning: "⚠ Under {limit}, guardian account required",
+    demoTitle: "Demo Accounts",
+    labelDefaultClub: "Default Club (Optional)",
 
     // Admin
     adminTitle: "System Settings",
@@ -125,8 +124,8 @@ const translations = {
 
     // Coach
     filterAll: "All",
-    discoverMatches: "Discover Matches",
-    myGamesLabel: "My Games",
+    discoverMatches: "Search game",
+    myGamesLabel: "Post game",
     confirmedGamesLabel: "Confirmed Games",
     noConfirmedGames: "No confirmed games yet.",
     teamLabel: "Team",
@@ -148,7 +147,7 @@ const translations = {
     signupDeadlineLabel: "Sign-up Deadline",
     detailsContactLabel: "Details & Contact",
     contactPhoneOptLabel: "Contact Phone",
-    publishMatchBtn: "Publish Match",
+    publishMatchBtn: "Search home game",
     createMatchSuccess: "Match created successfully!",
     fillRequiredFields: "Please fill all required fields!",
     createGroupTitle: "Create New Group",
@@ -170,6 +169,24 @@ const translations = {
     inviteCodeTitle: "Invite to {group}",
     inviteCodeHint: "Permanent code for this group — share with players.",
     inviteCodeGroupLabel: "{group} Invite Code",
+    scheduleConflictTitle: "Schedule Conflict Warning",
+    scheduleConflictCreateWarning:
+      "This team already has {count} match(es) within 2 hours of this time. Continue creating?",
+    scheduleConflictApplyWarning:
+      "This team already has {count} match(es) within 2 hours of this target match. Continue applying?",
+    continueAnyway: "Continue Anyway",
+    matchVisibilityLabel: "Visibility",
+    matchVisibilityPublic: "Public",
+    matchVisibilityPrivate: "Invite code only",
+    matchVisibilityPublicDesc: "Public - visible to all coaches in Discover",
+    matchVisibilityPrivateDesc:
+      "Invite code only - code will be generated after creating",
+    privateInviteLookupPlaceholder:
+      "Enter invite code to unlock private match",
+    privateInviteLookupSuccess: "Match found. You can apply below.",
+    privateInviteLookupFail: "Invalid invite code or match not found",
+    lookupBtn: "Lookup",
+    privateGameInviteCodeLabel: "Private - Invite Code:",
     movePlayerTitle: "Move {player}",
     selectDestGroupLabel: "Select Destination Group",
     confirmMoveBtn: "Confirm Move",
@@ -180,14 +197,16 @@ const translations = {
     removePlayerBtn: "Remove Player",
     playerRemoved: "Player removed!",
     createdBy: "Created by",
+    gamesPlayedCountLabel: "Matches",
+    gamesPlayedCountShort: "Matches",
     applicationPending: "Application Pending",
-    applyToPlay: "Apply to Play Against",
+    applyToPlay: "Apply for match",
     opponentLocked: "Opponent Locked",
     noGroupsYet: "No groups yet. Create a group and invite players!",
     inviteCoachBtn: "Invite Coach",
     groupBtnLabel: "Group",
     addAgeGroup: "Add Age Group",
-    addTeamBtn: "Add Team",
+    addTeamBtn: "Add Group",
     addPlayerBtn: "Add Player",
     playerAdded: "Player added!",
     offlinePlayerModalDesc:
@@ -202,6 +221,48 @@ const translations = {
     applicationRejectedRemoved: "Application rejected and removed.",
     rosterManagementLabel: "👥 Roster Management",
     invitePlayersBtn: "Invite Players",
+    inviteMoreBtn: "Invite More",
+    coachHistoryBtn: "History",
+    coachHistoryTitle: "Match History",
+    coachHistoryEmpty: "No related matches yet.",
+    coachHistoryNoteLabel: "Note",
+    coachHistoryNotePlaceholder: "Add a note for this match",
+    coachHistoryNoteSave: "Save Note",
+    coachHistoryNoteSaved: "History note saved",
+    coachHistoryNoteSaving: "Saving...",
+    coachHistoryResultLabel: "Result (optional)",
+    coachHistoryResultWin: "Win",
+    coachHistoryResultLose: "Lose",
+    cancelMatchBtn: "Cancel Match",
+    cancelMatchTitle: "Cancel Match",
+    cancelMatchReasonPrompt: "Please provide a reason for cancellation.",
+    matchCancelledSuccess: "Match cancelled. Total cancellations: {count}",
+    coachCancellationCountLabel: "Cancellations: {count}",
+    addToCalendarBtn: "Add to Calendar",
+    calendarAdded: "Added to system calendar",
+    calendarPermissionDenied: "Calendar permission was denied",
+    calendarUnavailable: "No writable system calendar was found",
+    calendarInvalidDate: "Invalid match time, cannot add to calendar",
+    calendarAddFailed: "Unable to add to calendar",
+    occurrenceConfirmBannerTitle: "Please confirm whether this match happened",
+    occurrenceConfirmBannerBody:
+      "After both coaches confirm, the match count will increase.",
+    occurrenceConfirmYesBtn: "Yes, it happened",
+    occurrenceConfirmNoBtn: "No, it didn't",
+    occurrenceConfirmPending: "Awaiting confirmation",
+    occurrencePeerSubmittedToast:
+      "The other coach has submitted their match occurrence confirmation.",
+    confirmedParticipationCount: "Confirmed ({count})",
+    waitingConfirmationCount: "Waiting Confirmation ({count})",
+    participatingLabel: "Participating",
+    participateBtn: "Join",
+    noneLabel: "None",
+    coachNoteModalTitle: "Set Private Nickname",
+    coachNoteLabel: "Private Nickname",
+    coachNotePlaceholder: "Enter a private nickname visible only to you",
+    coachNoteSaving: "Saving...",
+    coachNoteSaved: "Private nickname saved",
+    coachNoteDeleted: "Private nickname deleted",
     requiresApprovalLabel: "Requires Your Approval",
     guardianApprovedLabel: "🛡 Guardian Approved",
     approveBtn: "Approve",
@@ -225,8 +286,11 @@ const translations = {
     sendInvitationsBtn: "Send Invitations",
     invitationsSent: "Invitations sent!",
     invitePlayersTitle: "Invite Players to Game",
-    homeTeamLabel: "Home Team",
-    awayTeamLabel: "Away Team",
+    homeTeamLabel: "My Team",
+    awayTeamLabel: "Opponent",
+    matchVenueLabel: "Home/Away",
+    matchVenueHome: "HOME",
+    matchVenueAway: "AWAY",
     opponentCoachLabel: "Opponent Coach",
     opponentCoachEmailLabel: "Opponent Email",
     opponentCoachPhoneLabel: "Opponent Phone",
@@ -240,9 +304,15 @@ const translations = {
     statusInfoLabel: "Status",
     volunteersInfoLabel: "Volunteers",
     detailsInfoLabel: "Details",
+    ageGenderInfoLabel: "Age Group & Gender",
     editMatchTitle: "Edit Match Info",
+    invalidMatchTime: "Invalid match time. Please select a valid time.",
+    invalidPhoneFormat:
+      "Phone format is invalid. Use digits only, with an optional leading +.",
     applySent: "Application sent!",
     selectHomeTeamLabel: "Your Home Team (required)",
+    createMatchTeamAutoFillHint:
+      "Sport, location, and age group will auto-fill from the selected team or provide available options.",
     noGroupsCreateFirst: "No groups yet — create a group first.",
     noMatchingGroupsForGame:
       "No team matches this game's age/gender requirement.",
@@ -250,6 +320,9 @@ const translations = {
     confirmApplyBtn: "Confirm & Apply",
     matchingTeamsLabel: "Matching teams",
     otherTeamsLabel: "Other teams",
+    strictAgeMatchLabel: "Allow only same-age teams to apply",
+    strictAgeMatchHint:
+      "When enabled, only teams with matching age groups can submit match applications.",
 
     // Player
     gameInvitationsLabel: "Game Invitations",
@@ -304,11 +377,45 @@ const translations = {
     // Header + notifications (index.tsx)
     notifPanelTitle: "Notifications",
     noNotifsText: "No notifications",
+    notifGameInvitationTitle: "Game Invitation",
+    notifMatchAcceptedTitle: "Match Accepted",
+    notifMatchApplicationTitle: "Match Application",
+    notifRosterApprovedTitle: "Roster Approved",
+    notifGameUpdatedTitle: "Game Updated",
+    notifGuardianApprovedTitle: "Guardian Approved",
+    notifWithdrawalTitle: "Withdrawal",
+    notifNotParticipatingTitle: "Not Participating",
+    notifMatchCancelledTitle: "Match Cancelled",
+    notifBodyMatchApplication: '{coach} applied for "{gameLabel}".',
+    notifBodyMatchApplicationDetailed:
+      '{coach} applied for "{gameLabel}" with team {teamName} ({ageGender}).',
+    notifMatchApplicationRemovedTitle: "Match Application Removed",
+    notifBodyMatchApplicationRemoved:
+      '{coach} deleted their account, so their application for "{gameLabel}" was removed.',
+    notifMatchRemovedTitle: "Match Removed",
+    notifBodyMatchRemoved:
+      '{coach} deleted their account, so "{gameLabel}" has been removed.',
+    notifBodyGameInvitation:
+      '{coach} invited you to play "{gameLabel}" on {time}.',
+    notifBodyMatchAccepted:
+      'Your application for "{gameLabel}" was accepted by {coach}!',
+    notifBodyRosterApproved:
+      '{coach} approved your spot for "{gameLabel}". You\'re in!',
+    notifBodyGameUpdated:
+      'Match details updated by {coach}.\n📅 {time}\n📍 {location}',
+    notifBodyGuardianApproved:
+      '{guardian} approved {child} for "{gameLabel}". Awaiting your final approval.',
+    notifBodyWithdrawal:
+      '{player} withdrew from "{gameLabel}". Reason: {reason}',
+    notifBodyNotParticipating:
+      '{player} set status to not participating for "{gameLabel}".',
+    notifBodyMatchCancelled:
+      '{coach} cancelled "{gameLabel}". Reason: {reason}',
 
     deleteGameBtn: "Delete Game",
     deleteGameTitle: "Delete Game?",
     deleteGameConfirm:
-      "This game has not been confirmed yet. Are you sure you want to delete it? This cannot be undone.",
+      "This posted game is not confirmed yet. Are you sure you want to delete it? This cannot be undone.",
     gameDeleted: "Game deleted.",
 
     // Profile screen
@@ -334,6 +441,15 @@ const translations = {
       "Send a verification code to {email} and enter it to change your password.",
     profilePwdEmailHint:
       "A security notification will be sent to {email} after the password is changed.",
+    deleteAccountBtn: "Delete Account",
+    deleteAccountTitle: "Delete Account?",
+    deleteAccountCoachConfirm:
+      "Your account will be deleted, your created matches will be removed, and related coaches will be notified. This cannot be undone.",
+    deleteAccountPlayerConfirm:
+      "Your account will be deleted, you will be removed from related teams, and the coaches of those teams will be notified. This cannot be undone.",
+    deleteAccountGuardianConfirm:
+      "Your account will be deleted and linked underage players will become unbound from a guardian so they can continue using the app. This cannot be undone.",
+    accountDeleted: "Account deleted.",
 
     // Club strings
     clubNotSet: "Not set",
@@ -346,6 +462,9 @@ const translations = {
     phName: "Your Name",
     phPhone: "+1 555 0000",
     createClubBtn: "Create",
+    clubDefaultLocationLabel: "Default Location",
+    clubDefaultLocationPlaceholder: "e.g. Main Stadium",
+    saveClubLocationBtn: "Save Location",
     noClubs: "No clubs yet",
     manageClubsTitle: "Manage Clubs",
     manageClubsDesc:
@@ -358,6 +477,7 @@ const translations = {
     noMatchesFound: "No matches found",
     // Loading / Error screens
     connectingText: "Connecting to backend…",
+    loadingWelcomeBanner: "Welcome",
     cannotConnectTitle: "Cannot Connect to Backend",
     cannotConnectSub: "Make sure the FastAPI server is running at",
     retryBtn: "Retry",
@@ -406,8 +526,10 @@ const translations = {
     guardianAccountHint: "监护人可登录此账号审批孩子的上场申请",
     labelGuardianName: "监护人姓名",
     labelGuardianEmail: "监护人邮箱",
+    labelGuardianEmailCode: "监护人邮箱验证码",
     labelGuardianPwd: "监护人密码",
     guardianPwdHint: "至少6位，不能含有空格、<、>、引号",
+    hintGuardianEmailCode: "请输入发送到监护人邮箱的6位验证码",
     labelPhone: "电话号码",
     labelDefaultClub: "主要俱乐部（选填）",
     labelCoachRegCode: "教练注册码",
@@ -447,6 +569,7 @@ const translations = {
     errGuardianPwdInvalid: "监护人密码不能包含空格、<、>、引号",
     errGuardianPwdTooShort: "监护人密码至少需要6位",
     errGuardianRequired: "未满{limit}岁须同时填写监护人信息",
+    errGuardianCodeRequired: "请先获取并填写监护人邮箱验证码",
     ageDisplay: "年龄：{age} 岁",
     underageWarning: "⚠ 未满{limit}岁，需同时注册监护人账号",
 
@@ -471,7 +594,7 @@ const translations = {
 
     filterAll: "全部",
     discoverMatches: "发现比赛",
-    myGamesLabel: "我的比赛",
+    myGamesLabel: "我发布的比赛",
     confirmedGamesLabel: "已确定比赛",
     noConfirmedGames: "暂无已确定比赛。",
     teamLabel: "球队",
@@ -513,6 +636,22 @@ const translations = {
     inviteCodeTitle: "邀请加入 {group}",
     inviteCodeHint: "专属常驻邀请码，可重复使用。",
     inviteCodeGroupLabel: "{group} 邀请码",
+    scheduleConflictTitle: "赛程冲突提醒",
+    scheduleConflictCreateWarning:
+      "该队伍在当前时间前后2小时内已有 {count} 场比赛，仍要创建吗？",
+    scheduleConflictApplyWarning:
+      "该队伍在目标比赛时间前后2小时内已有 {count} 场比赛，仍要申请吗？",
+    continueAnyway: "仍然继续",
+    matchVisibilityLabel: "可见范围",
+    matchVisibilityPublic: "公开",
+    matchVisibilityPrivate: "仅邀请码可见",
+    matchVisibilityPublicDesc: "公开 - 所有教练可在发现页看到",
+    matchVisibilityPrivateDesc: "仅邀请码可见 - 创建后生成邀请码",
+    privateInviteLookupPlaceholder: "输入邀请码查看私密比赛",
+    privateInviteLookupSuccess: "已找到比赛，可在下方申请对战",
+    privateInviteLookupFail: "邀请码无效或比赛不存在",
+    lookupBtn: "查找",
+    privateGameInviteCodeLabel: "私密 - 邀请码：",
     movePlayerTitle: "移动 {player}",
     selectDestGroupLabel: "选择目标队伍",
     confirmMoveBtn: "确认移动",
@@ -522,6 +661,8 @@ const translations = {
     removePlayerBtn: "移除球员",
     playerRemoved: "球员已移除！",
     createdBy: "发布者",
+    gamesPlayedCountLabel: "比赛数",
+    gamesPlayedCountShort: "比赛数",
     applicationPending: "申请中",
     applyToPlay: "申请对战",
     opponentLocked: "对手已锁定",
@@ -544,6 +685,46 @@ const translations = {
     applicationRejectedRemoved: "已不接受该申请，并从列表移除。",
     rosterManagementLabel: "👥 阵容管理",
     invitePlayersBtn: "邀请球员",
+    inviteMoreBtn: "邀请更多",
+    coachHistoryBtn: "历史记录",
+    coachHistoryTitle: "比赛历史记录",
+    coachHistoryEmpty: "暂无与该教练相关的比赛。",
+    coachHistoryNoteLabel: "备注",
+    coachHistoryNotePlaceholder: "为这场比赛添加备注",
+    coachHistoryNoteSave: "保存备注",
+    coachHistoryNoteSaved: "历史记录备注已保存",
+    coachHistoryNoteSaving: "保存中...",
+    coachHistoryResultLabel: "结果（可选）",
+    coachHistoryResultWin: "赢了",
+    coachHistoryResultLose: "输了",
+    cancelMatchBtn: "取消比赛",
+    cancelMatchTitle: "取消比赛",
+    cancelMatchReasonPrompt: "请填写取消比赛原因。",
+    matchCancelledSuccess: "比赛已取消。累计取消次数：{count}",
+    coachCancellationCountLabel: "取消次数：{count}",
+    addToCalendarBtn: "加入系统日历",
+    calendarAdded: "已加入系统日历",
+    calendarPermissionDenied: "没有获得日历权限",
+    calendarUnavailable: "未找到可写入的系统日历",
+    calendarInvalidDate: "比赛时间无效，无法加入日历",
+    calendarAddFailed: "无法加入日历",
+    occurrenceConfirmBannerTitle: "请确认这场比赛是否发生",
+    occurrenceConfirmBannerBody: "两位教练都确认后，比赛数量才会增加。",
+    occurrenceConfirmYesBtn: "是，发生了",
+    occurrenceConfirmNoBtn: "否，没有发生",
+    occurrenceConfirmPending: "等待确认",
+    occurrencePeerSubmittedToast: "对方教练已提交比赛是否发生的确认。",
+    confirmedParticipationCount: "确定参加（{count}）",
+    waitingConfirmationCount: "等待确认（{count}）",
+    participatingLabel: "参加",
+    participateBtn: "参加",
+    noneLabel: "暂无",
+    coachNoteModalTitle: "设置备注昵称",
+    coachNoteLabel: "备注昵称",
+    coachNotePlaceholder: "输入仅自己可见的备注昵称",
+    coachNoteSaving: "保存中...",
+    coachNoteSaved: "备注昵称已保存",
+    coachNoteDeleted: "备注昵称已删除",
     requiresApprovalLabel: "需要您的审批",
     guardianApprovedLabel: "🛡 监护人已批准",
     approveBtn: "批准",
@@ -566,8 +747,11 @@ const translations = {
     sendInvitationsBtn: "发送邀请",
     invitationsSent: "邀请已发送！",
     invitePlayersTitle: "邀请球员参加比赛",
-    homeTeamLabel: "主队",
-    awayTeamLabel: "客队",
+    homeTeamLabel: "我的队伍",
+    awayTeamLabel: "对手",
+    matchVenueLabel: "主客场",
+    matchVenueHome: "主场",
+    matchVenueAway: "客场",
     opponentCoachLabel: "对手教练",
     opponentCoachEmailLabel: "对手邮箱",
     opponentCoachPhoneLabel: "对手电话",
@@ -581,15 +765,22 @@ const translations = {
     statusInfoLabel: "状态",
     volunteersInfoLabel: "志愿者",
     detailsInfoLabel: "详情",
+    ageGenderInfoLabel: "年龄组与性别",
     editMatchTitle: "编辑比赛信息",
+    invalidMatchTime: "比赛时间不合法，请重新选择有效时间。",
+    invalidPhoneFormat: "电话号码格式不正确。只能输入数字，开头可选 +。",
     applySent: "申请已发送！",
     selectHomeTeamLabel: "主队（参赛队伍，必填）",
+    createMatchTeamAutoFillHint:
+      "运动类型、地点和年龄段会根据所选队伍自动填写，或提供可选项。",
     noGroupsCreateFirst: "暂无队伍，请先创建队伍。",
     noMatchingGroupsForGame: "没有符合该比赛年龄/性别要求的队伍。",
     applyToGameTitle: "申请对战",
     confirmApplyBtn: "确认并申请",
     matchingTeamsLabel: "符合条件的队伍",
     otherTeamsLabel: "其他队伍",
+    strictAgeMatchLabel: "仅允许相同年龄组队伍申请",
+    strictAgeMatchHint: "开启后，只有年龄组匹配的队伍可以提交对战申请。",
 
     gameInvitationsLabel: "比赛邀请",
     myScheduleLabel: "我的日程",
@@ -641,10 +832,38 @@ const translations = {
 
     notifPanelTitle: "通知",
     noNotifsText: "暂无通知",
+    notifGameInvitationTitle: "比赛邀请",
+    notifMatchAcceptedTitle: "对战已接受",
+    notifMatchApplicationTitle: "对战申请",
+    notifRosterApprovedTitle: "报名已批准",
+    notifGameUpdatedTitle: "比赛信息更新",
+    notifGuardianApprovedTitle: "监护人已批准",
+    notifWithdrawalTitle: "请假",
+    notifNotParticipatingTitle: "不参与",
+    notifMatchCancelledTitle: "比赛已取消",
+    notifBodyMatchApplication: "{coach} 申请了 \"{gameLabel}\"。",
+    notifBodyMatchApplicationDetailed:
+      "{coach} 申请了你的比赛 \"{gameLabel}\"，队伍：{teamName}（{ageGender}）。",
+    notifMatchApplicationRemovedTitle: "对战申请已移除",
+    notifBodyMatchApplicationRemoved:
+      "{coach} 已注销账号，因此其对比赛 \"{gameLabel}\" 的申请已被移除。",
+    notifMatchRemovedTitle: "比赛已删除",
+    notifBodyMatchRemoved:
+      "{coach} 已注销账号，因此比赛 \"{gameLabel}\" 已被删除。",
+    notifBodyGameInvitation: "{coach} 邀请你参加 \"{gameLabel}\"，时间：{time}。",
+    notifBodyMatchAccepted: "你对 \"{gameLabel}\" 的申请已被 {coach} 接受！",
+    notifBodyRosterApproved: "{coach} 已批准你参加 \"{gameLabel}\"。你已入选！",
+    notifBodyGameUpdated: "比赛信息由 {coach} 更新。\n📅 {time}\n📍 {location}",
+    notifBodyGuardianApproved:
+      "{guardian} 已批准 {child} 参加 \"{gameLabel}\"，等待你最终确认。",
+    notifBodyWithdrawal: "{player} 已退出 \"{gameLabel}\"。原因：{reason}",
+    notifBodyNotParticipating:
+      "{player} 将 \"{gameLabel}\" 设置为不参与。",
+    notifBodyMatchCancelled: "{coach} 已取消 \"{gameLabel}\"。原因：{reason}",
 
     deleteGameBtn: "删除比赛",
     deleteGameTitle: "删除比赛？",
-    deleteGameConfirm: "此比赛尚未确定。确定要删除吗？此操作不可撤销。",
+    deleteGameConfirm: "此已发布比赛尚未确定。确定要删除吗？此操作不可撤销。",
     gameDeleted: "比赛已删除。",
 
     // Profile screen
@@ -668,6 +887,15 @@ const translations = {
     profilePwdFailed: "修改失败",
     profilePwdCodeHint: "请先向 {email} 发送验证码，并填写验证码后再修改密码。",
     profilePwdEmailHint: "修改成功后，安全提醒邮件将发送至 {email}",
+    deleteAccountBtn: "注销账号",
+    deleteAccountTitle: "确认注销账号？",
+    deleteAccountCoachConfirm:
+      "注销后将删除该账号、该教练创建的比赛，并通知相关的对方教练。此操作不可撤销。",
+    deleteAccountPlayerConfirm:
+      "注销后将删除该账号、从相关队伍中移除该球员，并通知相关队伍的教练。此操作不可撤销。",
+    deleteAccountGuardianConfirm:
+      "注销后将删除该账号，并把已绑定的低龄球员改为未绑定家长状态，使其可以继续正常使用。此操作不可撤销。",
+    accountDeleted: "账号已注销。",
 
     // Club strings
     clubNotSet: "不设置",
@@ -681,6 +909,9 @@ const translations = {
     phPhone: "+86 138 0000 0000",
 
     createClubBtn: "创建",
+    clubDefaultLocationLabel: "默认地点",
+    clubDefaultLocationPlaceholder: "例如：主体育场",
+    saveClubLocationBtn: "保存地点",
     noClubs: "暂无俱乐部",
     manageClubsTitle: "俱乐部管理",
     manageClubsDesc: "在这里管理您的俱乐部，创建队伍时可以选择所属俱乐部。",
@@ -691,6 +922,7 @@ const translations = {
     noMatchesFound: "暂无符合条件的比赛",
 
     connectingText: "正在连接后端服务器…",
+    loadingWelcomeBanner: "Welcome",
     cannotConnectTitle: "无法连接到后端",
     cannotConnectSub: "请确保 FastAPI 服务器正在运行于",
     retryBtn: "重试",
@@ -740,8 +972,11 @@ const translations = {
       "Ο κηδεμόνας μπορεί να συνδεθεί για να εγκρίνει τη συμμετοχή του παιδιού",
     labelGuardianName: "Όνομα Κηδεμόνα",
     labelGuardianEmail: "Email Κηδεμόνα",
+    labelGuardianEmailCode: "Κωδικός Email Κηδεμόνα",
     labelGuardianPwd: "Κωδικός Κηδεμόνα",
     guardianPwdHint: "Τουλάχιστον 6 χαρακτήρες",
+    hintGuardianEmailCode:
+      "Εισάγετε τον 6ψήφιο κωδικό που στάλθηκε στο email του κηδεμόνα",
     labelPhone: "Αριθμός Τηλεφώνου",
     labelDefaultClub: "Κύριος Σύλλογος (Προαιρετικό)",
     labelCoachRegCode: "Κωδικός Εγγραφής Προπονητή",
@@ -786,6 +1021,8 @@ const translations = {
       "Ο κωδικός κηδεμόνα πρέπει να έχει τουλάχιστον 6 χαρακτήρες",
     errGuardianRequired:
       "Απαιτούνται στοιχεία κηδεμόνα για παίκτες κάτω των {limit}",
+    errGuardianCodeRequired:
+      "Ζητήστε και εισαγάγετε τον κωδικό επαλήθευσης email του κηδεμόνα",
     ageDisplay: "Ηλικία: {age}",
     underageWarning: "⚠ Κάτω των {limit}, απαιτείται κηδεμόνας",
 
@@ -809,7 +1046,7 @@ const translations = {
 
     filterAll: "Όλα",
     discoverMatches: "Ανακάλυψη Αγώνων",
-    myGamesLabel: "Οι Αγώνες μου",
+    myGamesLabel: "Αναρτημένοι Αγώνες",
     confirmedGamesLabel: "Επιβεβαιωμένοι Αγώνες",
     noConfirmedGames: "Δεν υπάρχουν επιβεβαιωμένοι αγώνες.",
     teamLabel: "Ομάδα",
@@ -831,7 +1068,7 @@ const translations = {
     signupDeadlineLabel: "Προθεσμία Εγγραφής",
     detailsContactLabel: "Λεπτομέρειες & Επικοινωνία",
     contactPhoneOptLabel: "Τηλέφωνο επικοινωνίας",
-    publishMatchBtn: "Δημοσίευση Αγώνα",
+    publishMatchBtn: "Βρες εντός έδρας",
     createMatchSuccess: "Ο αγώνας δημιουργήθηκε επιτυχώς!",
     fillRequiredFields: "Συμπληρώστε όλα τα υποχρεωτικά πεδία!",
     createGroupTitle: "Δημιουργία Νέας Ομάδας",
@@ -854,6 +1091,27 @@ const translations = {
     inviteCodeHint:
       "Μόνιμος κωδικός για αυτή την ομάδα — μοιραστείτε τον με παίκτες.",
     inviteCodeGroupLabel: "{group} Κωδικός Πρόσκλησης",
+    scheduleConflictTitle: "Προειδοποίηση Σύγκρουσης Προγράμματος",
+    scheduleConflictCreateWarning:
+      "Αυτή η ομάδα έχει ήδη {count} αγώνα/ες μέσα σε 2 ώρες από αυτή την ώρα. Να συνεχίσει η δημιουργία;",
+    scheduleConflictApplyWarning:
+      "Αυτή η ομάδα έχει ήδη {count} αγώνα/ες μέσα σε 2 ώρες από αυτόν τον αγώνα. Να συνεχίσει η αίτηση;",
+    continueAnyway: "Συνέχεια",
+    matchVisibilityLabel: "Ορατότητα",
+    matchVisibilityPublic: "Δημόσιο",
+    matchVisibilityPrivate: "Μόνο με κωδικό πρόσκλησης",
+    matchVisibilityPublicDesc:
+      "Δημόσιο - ορατό σε όλους τους προπονητές στη σελίδα Discover",
+    matchVisibilityPrivateDesc:
+      "Μόνο με κωδικό πρόσκλησης - ο κωδικός δημιουργείται μετά τη δημιουργία",
+    privateInviteLookupPlaceholder:
+      "Εισάγετε κωδικό πρόσκλησης για να δείτε ιδιωτικό αγώνα",
+    privateInviteLookupSuccess:
+      "Ο αγώνας βρέθηκε. Μπορείτε να κάνετε αίτηση παρακάτω.",
+    privateInviteLookupFail:
+      "Μη έγκυρος κωδικός ή ο αγώνας δεν βρέθηκε",
+    lookupBtn: "Αναζήτηση",
+    privateGameInviteCodeLabel: "Ιδιωτικό - Κωδικός Πρόσκλησης:",
     movePlayerTitle: "Μετακίνηση {player}",
     selectDestGroupLabel: "Επιλέξτε Ομάδα Προορισμού",
     confirmMoveBtn: "Επιβεβαίωση Μετακίνησης",
@@ -863,15 +1121,17 @@ const translations = {
     removePlayerBtn: "Αφαίρεση Παίκτη",
     playerRemoved: "Ο παίκτης αφαιρέθηκε!",
     createdBy: "Δημιουργός",
+    gamesPlayedCountLabel: "Αγώνες",
+    gamesPlayedCountShort: "Αγώνες",
     applicationPending: "Εκκρεμής Αίτηση",
-    applyToPlay: "Αίτηση Αντίπαλου",
+    applyToPlay: "κάνε αίτημα για αγώνα",
     opponentLocked: "Αντίπαλος Κλειδώθηκε",
     noGroupsYet:
       "Δεν υπάρχουν ομάδες. Δημιουργήστε μια και προσκαλέστε παίκτες!",
-    inviteCoachBtn: "Πρόσκληση Προπονητή",
+    inviteCoachBtn: "Προσθεσε Tμήμα",
     groupBtnLabel: "Ομάδα",
     addAgeGroup: "Προσθήκη Ηλικιακής Ομάδας",
-    addTeamBtn: "Προσθήκη Ομάδας",
+    addTeamBtn: "Προσθεσε Tμήμα",
     addPlayerBtn: "Προσθήκη Παίκτη",
     playerAdded: "Ο παίκτης προστέθηκε!",
     offlinePlayerModalDesc:
@@ -886,6 +1146,49 @@ const translations = {
     applicationRejectedRemoved: "Η αίτηση απορρίφθηκε και αφαιρέθηκε.",
     rosterManagementLabel: "👥 Διαχείριση Ρόστερ",
     invitePlayersBtn: "Πρόσκληση Παικτών",
+    inviteMoreBtn: "Πρόσκληση Περισσότερων",
+    coachHistoryBtn: "Ιστορικό",
+    coachHistoryTitle: "Ιστορικό Αγώνων",
+    coachHistoryEmpty: "Δεν υπάρχουν σχετικοί αγώνες ακόμη.",
+    coachHistoryNoteLabel: "Σημείωση",
+    coachHistoryNotePlaceholder: "Προσθέστε σημείωση για αυτόν τον αγώνα",
+    coachHistoryNoteSave: "Αποθήκευση Σημείωσης",
+    coachHistoryNoteSaved: "Η σημείωση ιστορικού αποθηκεύτηκε",
+    coachHistoryNoteSaving: "Αποθήκευση...",
+    coachHistoryResultLabel: "Αποτέλεσμα (προαιρετικό)",
+    coachHistoryResultWin: "Νίκη",
+    coachHistoryResultLose: "Ήττα",
+    cancelMatchBtn: "Ακύρωση Αγώνα",
+    cancelMatchTitle: "Ακύρωση Αγώνα",
+    cancelMatchReasonPrompt: "Παρακαλώ δώστε λόγο ακύρωσης.",
+    matchCancelledSuccess:
+      "Ο αγώνας ακυρώθηκε. Σύνολο ακυρώσεων: {count}",
+    coachCancellationCountLabel: "Ακυρώσεις: {count}",
+    addToCalendarBtn: "Προσθήκη στο Ημερολόγιο",
+    calendarAdded: "Προστέθηκε στο ημερολόγιο συστήματος",
+    calendarPermissionDenied: "Δεν δόθηκε άδεια ημερολογίου",
+    calendarUnavailable: "Δεν βρέθηκε εγγράψιμο ημερολόγιο συστήματος",
+    calendarInvalidDate: "Μη έγκυρη ώρα αγώνα, δεν ήταν δυνατή η προσθήκη",
+    occurrenceConfirmBannerTitle: "Επιβεβαιώστε αν πραγματοποιήθηκε ο αγώνας",
+    occurrenceConfirmBannerBody:
+      "Όταν και οι δύο προπονητές επιβεβαιώσουν, ο μετρητής αγώνων θα αυξηθεί.",
+    occurrenceConfirmYesBtn: "Ναι, πραγματοποιήθηκε",
+    occurrenceConfirmNoBtn: "Όχι, δεν πραγματοποιήθηκε",
+    occurrenceConfirmPending: "Σε αναμονή επιβεβαίωσης",
+    occurrencePeerSubmittedToast:
+      "Ο άλλος προπονητής υπέβαλε την επιβεβαίωση διεξαγωγής του αγώνα.",
+    calendarAddFailed: "Δεν ήταν δυνατή η προσθήκη στο ημερολόγιο",
+    confirmedParticipationCount: "Επιβεβαιωμένοι ({count})",
+    waitingConfirmationCount: "Αναμονή Επιβεβαίωσης ({count})",
+    participatingLabel: "Συμμετοχή",
+    participateBtn: "Συμμετοχή",
+    noneLabel: "Κανένα",
+    coachNoteModalTitle: "Ορισμός Ιδιωτικού Ψευδωνύμου",
+    coachNoteLabel: "Ιδιωτικό Ψευδώνυμο",
+    coachNotePlaceholder: "Εισαγάγετε ιδιωτικό ψευδώνυμο ορατό μόνο σε εσάς",
+    coachNoteSaving: "Αποθήκευση...",
+    coachNoteSaved: "Το ιδιωτικό ψευδώνυμο αποθηκεύτηκε",
+    coachNoteDeleted: "Το ιδιωτικό ψευδώνυμο διαγράφηκε",
     requiresApprovalLabel: "Απαιτείται Έγκρισή σας",
     guardianApprovedLabel: "🛡 Εγκρίθηκε από Κηδεμόνα",
     approveBtn: "Έγκριση",
@@ -911,8 +1214,11 @@ const translations = {
     sendInvitationsBtn: "Αποστολή Προσκλήσεων",
     invitationsSent: "Οι προσκλήσεις εστάλησαν!",
     invitePlayersTitle: "Πρόσκληση Παικτών στον Αγώνα",
-    homeTeamLabel: "Γηπεδούχος",
-    awayTeamLabel: "Εκτός Έδρας",
+    homeTeamLabel: "Η Ομάδα μου",
+    awayTeamLabel: "Αντίπαλος",
+    matchVenueLabel: "Έδρα/Εκτός",
+    matchVenueHome: "ΕΔΡΑ",
+    matchVenueAway: "ΕΚΤΟΣ",
     opponentCoachLabel: "Προπονητής Αντιπάλου",
     opponentCoachEmailLabel: "Email Αντιπάλου",
     opponentCoachPhoneLabel: "Τηλέφωνο Αντιπάλου",
@@ -926,9 +1232,16 @@ const translations = {
     statusInfoLabel: "Κατάσταση",
     volunteersInfoLabel: "Εθελοντές",
     detailsInfoLabel: "Λεπτομέρειες",
+    ageGenderInfoLabel: "Ηλικιακή Ομάδα & Γένος",
     editMatchTitle: "Επεξεργασία Στοιχείων Αγώνα",
+    invalidMatchTime:
+      "Μη έγκυρη ώρα αγώνα. Επιλέξτε έγκυρη ημερομηνία και ώρα.",
+    invalidPhoneFormat:
+      "Μη έγκυρη μορφή τηλεφώνου. Επιτρέπονται μόνο ψηφία και προαιρετικό + στην αρχή.",
     applySent: "Η αίτηση εστάλη!",
     selectHomeTeamLabel: "Γηπεδούχος Ομάδα (υποχρεωτικό)",
+    createMatchTeamAutoFillHint:
+      "Το άθλημα, η τοποθεσία και η ηλικιακή ομάδα συμπληρώνονται αυτόματα από την επιλεγμένη ομάδα ή εμφανίζονται ως διαθέσιμες επιλογές.",
     noGroupsCreateFirst: "Δεν υπάρχουν ομάδες — δημιουργήστε πρώτα μια ομάδα.",
     noMatchingGroupsForGame:
       "Καμία ομάδα δεν ταιριάζει στις απαιτήσεις ηλικίας/φύλου του αγώνα.",
@@ -936,6 +1249,9 @@ const translations = {
     confirmApplyBtn: "Επιβεβαίωση & Αίτηση",
     matchingTeamsLabel: "Ομάδες που ταιριάζουν",
     otherTeamsLabel: "Άλλες ομάδες",
+    strictAgeMatchLabel: "Να επιτρέπονται μόνο ομάδες ίδιας ηλικίας",
+    strictAgeMatchHint:
+      "Όταν είναι ενεργό, μόνο ομάδες με ίδια ηλικιακή ομάδα μπορούν να κάνουν αίτηση.",
 
     gameInvitationsLabel: "Προσκλήσεις Αγώνων",
     myScheduleLabel: "Το Πρόγραμμά μου",
@@ -987,11 +1303,46 @@ const translations = {
 
     notifPanelTitle: "Ειδοποιήσεις",
     noNotifsText: "Δεν υπάρχουν ειδοποιήσεις",
+    notifGameInvitationTitle: "Πρόσκληση Αγώνα",
+    notifMatchAcceptedTitle: "Ο Αγώνας Έγινε Αποδεκτός",
+    notifMatchApplicationTitle: "Αίτηση Αγώνα",
+    notifRosterApprovedTitle: "Η Συμμετοχή Εγκρίθηκε",
+    notifGameUpdatedTitle: "Ενημέρωση Αγώνα",
+    notifGuardianApprovedTitle: "Έγκριση Κηδεμόνα",
+    notifWithdrawalTitle: "Αποχώρηση",
+    notifNotParticipatingTitle: "Μη Συμμετοχή",
+    notifMatchCancelledTitle: "Ακύρωση Αγώνα",
+    notifBodyMatchApplication:
+      'Ο/Η {coach} υπέβαλε αίτηση για "{gameLabel}".',
+    notifBodyMatchApplicationDetailed:
+      'Ο/Η {coach} υπέβαλε αίτηση για το "{gameLabel}" με ομάδα {teamName} ({ageGender}).',
+    notifMatchApplicationRemovedTitle: "Η αίτηση αγώνα αφαιρέθηκε",
+    notifBodyMatchApplicationRemoved:
+      'Ο/Η {coach} διέγραψε τον λογαριασμό του/της, οπότε η αίτησή του/της για το "{gameLabel}" αφαιρέθηκε.',
+    notifMatchRemovedTitle: "Ο αγώνας αφαιρέθηκε",
+    notifBodyMatchRemoved:
+      'Ο/Η {coach} διέγραψε τον λογαριασμό του/της, οπότε το "{gameLabel}" αφαιρέθηκε.',
+    notifBodyGameInvitation:
+      'Ο/Η {coach} σε προσκάλεσε να παίξεις στο "{gameLabel}" στις {time}.',
+    notifBodyMatchAccepted:
+      'Η αίτησή σου για το "{gameLabel}" έγινε αποδεκτή από τον/την {coach}!',
+    notifBodyRosterApproved:
+      'Ο/Η {coach} ενέκρινε τη θέση σου για το "{gameLabel}". Είσαι μέσα!',
+    notifBodyGameUpdated:
+      'Τα στοιχεία αγώνα ενημερώθηκαν από τον/την {coach}.\n📅 {time}\n📍 {location}',
+    notifBodyGuardianApproved:
+      'Ο/Η {guardian} ενέκρινε τον/την {child} για το "{gameLabel}". Αναμένεται η τελική σου έγκριση.',
+    notifBodyWithdrawal:
+      'Ο/Η {player} αποχώρησε από το "{gameLabel}". Αιτία: {reason}',
+    notifBodyNotParticipating:
+      'Ο/Η {player} δήλωσε μη συμμετοχή για το "{gameLabel}".',
+    notifBodyMatchCancelled:
+      'Ο/Η {coach} ακύρωσε το "{gameLabel}". Αιτία: {reason}',
 
     deleteGameBtn: "Διαγραφή Αγώνα",
     deleteGameTitle: "Διαγραφή Αγώνα;",
     deleteGameConfirm:
-      "Αυτός ο αγώνας δεν έχει επιβεβαιωθεί. Είστε σίγουροι ότι θέλετε να τον διαγράψετε; Η ενέργεια δεν είναι αναστρέψιμη.",
+      "Αυτός ο αναρτημένος αγώνας δεν έχει επιβεβαιωθεί. Είστε σίγουροι ότι θέλετε να τον διαγράψετε; Η ενέργεια δεν είναι αναστρέψιμη.",
     gameDeleted: "Ο αγώνας διαγράφηκε.",
 
     // Profile screen
@@ -1017,6 +1368,15 @@ const translations = {
       "Στείλτε κωδικό επαλήθευσης στο {email} και εισαγάγετέ τον για να αλλάξετε κωδικό.",
     profilePwdEmailHint:
       "Θα σταλεί ειδοποίηση ασφαλείας στο {email} μετά την αλλαγή.",
+    deleteAccountBtn: "Διαγραφή Λογαριασμού",
+    deleteAccountTitle: "Διαγραφή Λογαριασμού;",
+    deleteAccountCoachConfirm:
+      "Ο λογαριασμός σας θα διαγραφεί, οι αγώνες που δημιουργήσατε θα αφαιρεθούν και οι σχετικοί προπονητές θα ειδοποιηθούν. Η ενέργεια δεν αναιρείται.",
+    deleteAccountPlayerConfirm:
+      "Ο λογαριασμός σας θα διαγραφεί, θα αφαιρεθείτε από τις σχετικές ομάδες και οι προπονητές τους θα ειδοποιηθούν. Η ενέργεια δεν αναιρείται.",
+    deleteAccountGuardianConfirm:
+      "Ο λογαριασμός σας θα διαγραφεί και οι συνδεδεμένοι ανήλικοι παίκτες θα αποσυνδεθούν από κηδεμόνα ώστε να συνεχίσουν να χρησιμοποιούν κανονικά την εφαρμογή. Η ενέργεια δεν αναιρείται.",
+    accountDeleted: "Ο λογαριασμός διαγράφηκε.",
 
     // Club strings
     clubNotSet: "Δεν έχει οριστεί",
@@ -1029,6 +1389,9 @@ const translations = {
     phName: "Όνομα",
     phPhone: "+30 690 000 0000",
     createClubBtn: "Δημιουργία",
+    clubDefaultLocationLabel: "Προεπιλεγμένη Τοποθεσία",
+    clubDefaultLocationPlaceholder: "π.χ. Κεντρικό Στάδιο",
+    saveClubLocationBtn: "Αποθήκευση Τοποθεσίας",
     noClubs: "Δεν υπάρχουν σύλλογοι",
     manageClubsTitle: "Διαχείριση Συλλόγων",
     manageClubsDesc:
@@ -1040,6 +1403,7 @@ const translations = {
     noMatchesFound: "Δεν βρέθηκαν αγώνες",
 
     connectingText: "Σύνδεση με τον διακομιστή…",
+    loadingWelcomeBanner: "Welcome",
     cannotConnectTitle: "Αδύνατη η Σύνδεση με το Backend",
     cannotConnectSub: "Βεβαιωθείτε ότι ο διακομιστής FastAPI είναι ενεργός στο",
     retryBtn: "Επανάληψη",

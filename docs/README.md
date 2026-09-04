@@ -32,6 +32,12 @@ team-matcher-app/
 │   ├── components/                # Shared UI components
 │   ├── hooks/                     # Theme/color-scheme hooks
 │   ├── constants/                 # Theme constants
+|   ├── screens/
+|   |   ├── AdminScreen.tsx
+|   |   ├── CoachScreen.tsx
+|   |   ├── GuardianScreen.tsx
+|   |   ├── LoginScreen.tsx
+|   |   ├── PlayerScreen.tsx
 │   └── types.ts                   # Frontend domain types
 ├── assets/                        # App icons and static assets
 ├── docs/                          # This documentation set

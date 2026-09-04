@@ -10,7 +10,7 @@ from typing import List, Optional
 import uuid
 import random
 import string
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import re
 import asyncio
 from contextlib import asynccontextmanager
@@ -18,6 +18,7 @@ import os
 import threading
 import smtplib
 from email.message import EmailMessage
+from urllib.parse import quote
 
 def _load_dotenv(path: str = ".env") -> None:
     """Minimal .env loader for local/dev usage without extra dependencies."""
@@ -110,6 +111,7 @@ def send_admin_registration_notification(user_email: str, user_name: str, role: 
 
 
 _INVALID_PWD_RE = re.compile(r'[ <>"\']')
+GROUP_INVITE_TTL_HOURS = 48
 
 # ---- In-memory email code store: {email: (code, expires_timestamp)} ----
 _email_codes: dict = {}
@@ -167,6 +169,158 @@ def is_email_code_valid(db: Session, email: str, submitted_code: Optional[str]) 
     stored_code, expires_ts = entry
     return expires_ts >= _time.time() and stored_code == normalize_verification_code(submitted_code)
 
+def parse_user_roles(raw_role: Optional[str]) -> list[str]:
+    roles: list[str] = []
+    for token in (raw_role or "").split(","):
+        role = token.strip().lower()
+        if role and role not in roles:
+            roles.append(role)
+    return roles
+
+def has_user_role(user: Optional[models.User], role: str) -> bool:
+    if not user:
+        return False
+    return role.lower() in parse_user_roles(user.role)
+
+def append_user_role(raw_role: Optional[str], role: str) -> str:
+    roles = parse_user_roles(raw_role)
+    normalized = role.lower()
+    if normalized not in roles:
+        roles.append(normalized)
+    return ",".join(roles)
+
+def parse_age_groups(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    return [token.strip() for token in raw.split(",") if token.strip()]
+
+def invite_expiry_iso(now: Optional[datetime] = None) -> str:
+    base = now or datetime.utcnow()
+    return (base + timedelta(hours=GROUP_INVITE_TTL_HOURS)).isoformat()
+
+def parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+def cleanup_expired_group_invites(db: Session, group_id: Optional[str] = None) -> None:
+    query = db.query(models.InviteCode)
+    if group_id:
+        query = query.filter(models.InviteCode.group_id == group_id)
+    now = datetime.utcnow()
+    dirty = False
+    for invite in query.all():
+        expires_at = parse_iso_datetime(invite.expires_at) or (
+            (parse_iso_datetime(invite.created_at) or now)
+            + timedelta(hours=GROUP_INVITE_TTL_HOURS)
+        )
+        if invite.used or expires_at <= now:
+            db.delete(invite)
+            dirty = True
+    if dirty:
+        db.flush()
+
+def generate_unique_group_code_value(db: Session) -> str:
+    existing_bind_codes: set[str] = set()
+    for group in db.query(models.TeamGroup).all():
+        for player in list(group.offline_players or []):
+            code = (player.get("bind_code") or "").strip().upper()
+            if code:
+                existing_bind_codes.add(code)
+    for _ in range(30):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if code in existing_bind_codes:
+            continue
+        if db.query(models.InviteCode).filter(models.InviteCode.code == code).first():
+            continue
+        if db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first():
+            continue
+        return code
+    return uuid.uuid4().hex[:8].upper()
+
+def ensure_legacy_group_invite_record(db: Session, group: Optional[models.TeamGroup]) -> None:
+    if not group or not (group.invite_code or "").strip():
+        return
+    code = group.invite_code.strip().upper()
+    if db.query(models.InviteCode).filter(models.InviteCode.code == code).first():
+        return
+    db.add(models.InviteCode(
+        id=f"ic_{uuid.uuid4().hex[:8]}",
+        code=code,
+        coach_id=group.coach_id,
+        group_id=group.id,
+        used=False,
+        used_by_player_id=None,
+        created_at=datetime.utcnow().isoformat(),
+        expires_at=invite_expiry_iso(),
+    ))
+    db.flush()
+
+def get_active_group_invites(db: Session, group_id: str) -> list[models.InviteCode]:
+    cleanup_expired_group_invites(db, group_id)
+    return (
+        db.query(models.InviteCode)
+        .filter(models.InviteCode.group_id == group_id)
+        .order_by(models.InviteCode.created_at.desc())
+        .all()
+    )
+
+def sync_group_latest_invite_code(db: Session, group: models.TeamGroup) -> None:
+    invites = get_active_group_invites(db, group.id)
+    latest_code = invites[0].code if invites else None
+    if group.invite_code != latest_code:
+        group.invite_code = latest_code
+        db.flush()
+
+def create_group_invite_record(db: Session, group: models.TeamGroup) -> models.InviteCode:
+    cleanup_expired_group_invites(db, group.id)
+    code = generate_unique_group_code_value(db)
+    now = datetime.utcnow()
+    invite = models.InviteCode(
+        id=f"ic_{uuid.uuid4().hex[:8]}",
+        code=code,
+        coach_id=group.coach_id,
+        group_id=group.id,
+        used=False,
+        used_by_player_id=None,
+        created_at=now.isoformat(),
+        expires_at=invite_expiry_iso(now),
+    )
+    db.add(invite)
+    db.flush()
+    group.invite_code = invite.code
+    db.flush()
+    return invite
+
+def consume_group_invite_code(db: Session, invite: models.InviteCode, player_id: str) -> None:
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == invite.group_id).first()
+    invite.used = True
+    invite.used_by_player_id = player_id
+    db.flush()
+    db.delete(invite)
+    db.flush()
+    if group:
+        sync_group_latest_invite_code(db, group)
+
+def find_group_by_active_invite_code(db: Session, code: str) -> tuple[Optional[models.TeamGroup], Optional[models.InviteCode]]:
+    normalized = code.upper().strip()
+    if not normalized:
+        return None, None
+    cleanup_expired_group_invites(db)
+    invite = db.query(models.InviteCode).filter(models.InviteCode.code == normalized).first()
+    if invite and invite.group_id:
+        group = db.query(models.TeamGroup).filter(models.TeamGroup.id == invite.group_id).first()
+        return group, invite
+    legacy_group = db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == normalized).first()
+    if legacy_group:
+        ensure_legacy_group_invite_record(db, legacy_group)
+        invite = db.query(models.InviteCode).filter(models.InviteCode.code == normalized).first()
+        return legacy_group, invite
+    return None, None
+
 def send_password_changed_email(to_email: str, name: str):
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     html = f"""
@@ -209,41 +363,290 @@ def _send_code_email_safe(to_email: str, code: str, source: str) -> None:
     except Exception as e:
         print(f"[EMAIL ERROR] {source} to {to_email}: {e}", flush=True)
 
+
+def _add_notification(db: Session, target_user_id: Optional[str], title: str, body: str) -> None:
+    if not target_user_id:
+        return
+    db.add(models.Notification(
+        id=f"n_{uuid.uuid4().hex[:12]}",
+        target_user_id=target_user_id,
+        title=title,
+        body=body,
+        read=False,
+        ts=datetime.utcnow().isoformat(),
+    ))
+
+
+def _notif_i18n(key: str, **params: str) -> str:
+    parts = [f"i18n:{key}"]
+    for name, value in params.items():
+        if value is None:
+            continue
+        parts.append(f"{name}={quote(str(value), safe='')}")
+    return "|".join(parts)
+
+
+def _game_label(game: models.Game) -> str:
+    return f"{game.sport} @ {game.location} ({game.time})"
+
+
+def _cleanup_deleted_player(db: Session, user: models.User) -> None:
+    def _is_finished_game(game: Optional[models.Game]) -> bool:
+        if not game:
+            return False
+        return bool(game.occurrence_counted) or (game.status or "").lower() == "locked"
+
+    notified_coach_ids: set[str] = set()
+    for group in db.query(models.TeamGroup).all():
+        player_ids = list(group.player_ids or [])
+        if user.id not in player_ids:
+            continue
+        group.player_ids = [player_id for player_id in player_ids if player_id != user.id]
+        if group.coach_id and group.coach_id not in notified_coach_ids:
+            _add_notification(
+                db,
+                group.coach_id,
+                "👤 球员账号已注销 / Player Account Deleted",
+                f"{user.name} deleted their account and has been removed from your team {group.team_name}.",
+            )
+            notified_coach_ids.add(group.coach_id)
+
+    # Keep finished match history: unlink player_id there, only delete unfinished rosters.
+    roster_rows = (
+        db.query(models.Roster)
+        .filter(models.Roster.player_id == user.id)
+        .all()
+    )
+    roster_ids_to_delete: list[str] = []
+    for roster in roster_rows:
+        game = db.query(models.Game).filter(models.Game.id == roster.game_id).first()
+        if _is_finished_game(game):
+            roster.player_id = None
+        else:
+            roster_ids_to_delete.append(roster.id)
+
+    if roster_ids_to_delete:
+        db.query(models.Roster).filter(
+            models.Roster.id.in_(roster_ids_to_delete)
+        ).delete(synchronize_session=False)
+
+    db.query(models.CoachPlayerNote).filter(
+        models.CoachPlayerNote.player_id == user.id
+    ).delete(synchronize_session=False)
+
+
+def _cleanup_deleted_guardian(db: Session, user: models.User) -> None:
+    child_ids = [
+        child.id
+        for child in db.query(models.User)
+        .filter(models.User.guardian_id == user.id)
+        .all()
+    ]
+    if not child_ids:
+        return
+
+    db.query(models.User).filter(
+        models.User.guardian_id == user.id
+    ).update({"guardian_id": None}, synchronize_session=False)
+
+    # Guardian cleanup is unlink-only (child guardian_id -> null) and does not remove game history.
+    db.query(models.Roster).filter(
+        models.Roster.player_id.in_(child_ids),
+        models.Roster.status == "pending_guardian",
+    ).update(
+        {"status": "approved", "guardian_approved": False},
+        synchronize_session=False,
+    )
+
+
+def _cleanup_deleted_coach(db: Session, user: models.User) -> None:
+    def _is_finished_game(game: models.Game) -> bool:
+        return bool(game.occurrence_counted) or (game.status or "").lower() == "locked"
+
+    coach_groups = (
+        db.query(models.TeamGroup)
+        .filter(models.TeamGroup.coach_id == user.id)
+        .all()
+    )
+    coach_group_ids = [group.id for group in coach_groups]
+    coach_group_player_ids = {
+        group.id: list(group.player_ids or []) for group in coach_groups
+    }
+    coach_club_ids = [club.id for club in db.query(models.Club).filter(models.Club.coach_id == user.id).all()]
+
+    created_games = (
+        db.query(models.Game)
+        .filter(models.Game.creator_id == user.id)
+        .all()
+    )
+    created_game_ids_to_delete: list[str] = []
+
+    for game in created_games:
+        if _is_finished_game(game):
+            # Keep finished games for history, but unlink the deleted coach and their groups.
+            game.creator_id = None
+            if game.opposing_team_id == user.id:
+                game.opposing_team_id = None
+            if game.home_group_id in coach_group_ids:
+                game.home_group_id = None
+            if game.opposing_group_id in coach_group_ids:
+                game.opposing_group_id = None
+            continue
+
+        created_game_ids_to_delete.append(game.id)
+        recipient_ids: set[str] = set()
+        if game.opposing_team_id and game.opposing_team_id != user.id:
+            recipient_ids.add(game.opposing_team_id)
+        for application in db.query(models.MatchApplication).filter(
+            models.MatchApplication.game_id == game.id
+        ).all():
+            if application.applicant_coach_id != user.id:
+                recipient_ids.add(application.applicant_coach_id)
+
+        for coach_id in recipient_ids:
+            _add_notification(
+                db,
+                coach_id,
+                _notif_i18n("notifMatchRemovedTitle"),
+                _notif_i18n(
+                    "notifBodyMatchRemoved",
+                    coach=user.name,
+                    gameLabel=_game_label(game),
+                ),
+            )
+
+    outgoing_apps = (
+        db.query(models.MatchApplication)
+        .filter(models.MatchApplication.applicant_coach_id == user.id)
+        .all()
+    )
+    notified_game_creator_ids: set[str] = set()
+    for application in outgoing_apps:
+        game = db.query(models.Game).filter(models.Game.id == application.game_id).first()
+        if not game or game.creator_id == user.id:
+            continue
+
+        notify_key = f"{game.id}:{game.creator_id}"
+        if notify_key not in notified_game_creator_ids:
+            _add_notification(
+                db,
+                game.creator_id,
+                _notif_i18n("notifMatchApplicationRemovedTitle"),
+                _notif_i18n(
+                    "notifBodyMatchApplicationRemoved",
+                    coach=user.name,
+                    gameLabel=_game_label(game),
+                ),
+            )
+            notified_game_creator_ids.add(notify_key)
+
+    opponent_games = (
+        db.query(models.Game)
+        .filter(models.Game.opposing_team_id == user.id)
+        .all()
+    )
+    for game in opponent_games:
+        if _is_finished_game(game):
+            # Keep finished games for history, only unlink the deleted coach side.
+            game.opposing_team_id = None
+            if game.opposing_group_id in coach_group_ids:
+                game.opposing_group_id = None
+            if game.home_group_id in coach_group_ids:
+                game.home_group_id = None
+            continue
+
+        if game.creator_id and game.creator_id != user.id:
+            _add_notification(
+                db,
+                game.creator_id,
+                "↩️ 对手已移除 / Opponent Removed",
+                f"{user.name} deleted their account, so your match \"{_game_label(game)}\" has been reopened for a new opponent.",
+            )
+
+        accepted_application = db.query(models.MatchApplication).filter(
+            models.MatchApplication.game_id == game.id,
+            models.MatchApplication.applicant_coach_id == user.id,
+        ).first()
+        affected_player_ids = []
+        if accepted_application and accepted_application.applicant_group_id:
+            affected_player_ids = coach_group_player_ids.get(
+                accepted_application.applicant_group_id,
+                [],
+            )
+        if affected_player_ids:
+            db.query(models.Roster).filter(
+                models.Roster.game_id == game.id,
+                models.Roster.player_id.in_(affected_player_ids),
+            ).delete(synchronize_session=False)
+
+        game.opposing_team_id = None
+        game.opposing_group_id = None
+        game.status = "open"
+
+    if created_game_ids_to_delete:
+        db.query(models.GameOccurrenceConfirmation).filter(
+            models.GameOccurrenceConfirmation.game_id.in_(created_game_ids_to_delete)
+        ).delete(synchronize_session=False)
+        db.query(models.Roster).filter(
+            models.Roster.game_id.in_(created_game_ids_to_delete)
+        ).delete(synchronize_session=False)
+        db.query(models.MatchApplication).filter(
+            models.MatchApplication.game_id.in_(created_game_ids_to_delete)
+        ).delete(synchronize_session=False)
+        db.query(models.Game).filter(
+            models.Game.id.in_(created_game_ids_to_delete)
+        ).delete(synchronize_session=False)
+
+    db.query(models.MatchApplication).filter(
+        models.MatchApplication.applicant_coach_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(models.CoachPlayerNote).filter(
+        models.CoachPlayerNote.coach_id == user.id
+    ).delete(synchronize_session=False)
+
+    if coach_group_ids:
+        db.query(models.InviteCode).filter(
+            models.InviteCode.group_id.in_(coach_group_ids)
+        ).delete(synchronize_session=False)
+        db.query(models.MatchApplication).filter(
+            models.MatchApplication.applicant_group_id.in_(coach_group_ids)
+        ).delete(synchronize_session=False)
+
+    if coach_club_ids:
+        db.query(models.User).filter(
+            models.User.default_club_id.in_(coach_club_ids)
+        ).update({"default_club_id": None}, synchronize_session=False)
+
+    db.query(models.TeamGroup).filter(
+        models.TeamGroup.coach_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(models.InviteCode).filter(
+        models.InviteCode.coach_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(models.CoachInviteCode).filter(
+        models.CoachInviteCode.created_by_id == user.id
+    ).delete(synchronize_session=False)
+    db.query(models.Club).filter(
+        models.Club.coach_id == user.id
+    ).delete(synchronize_session=False)
+
 async def _cleanup_expired_games():
-    """Background loop: delete games whose time is more than 1 day in the past and notify coaches."""
+    """Background loop: prune only stale unfinished games; keep finished games for history."""
     while True:
         try:
             db = SessionLocal()
             now = datetime.utcnow()
             games = db.query(models.Game).all()
             for game in games:
+                # Keep completed/locked games permanently so history views remain intact.
+                if bool(game.occurrence_counted) or (game.status or "").lower() == "locked":
+                    continue
                 try:
                     game_time = datetime.fromisoformat(game.time)
                 except Exception:
                     continue
                 if (now - game_time).total_seconds() <= 86400:
                     continue
-                # Collect coach IDs to notify (creator + opposing coach if set)
-                coach_ids: set = set()
-                if game.creator_id:
-                    coach_ids.add(game.creator_id)
-                if game.opposing_team_id:
-                    coach_ids.add(game.opposing_team_id)
-                ts = datetime.utcnow().isoformat()
-                for coach_id in coach_ids:
-                    db.add(models.Notification(
-                        id=f"n_{uuid.uuid4().hex[:12]}",
-                        target_user_id=coach_id,
-                        title="比赛已自动删除 / Match Auto-Removed",
-                        body=(
-                            f"比赛【{game.sport} @ {game.location}（{game.time}）】"
-                            f"已结束超过1天，系统已自动将其删除。"
-                            f" / The match [{game.sport} @ {game.location} ({game.time})] "
-                            f"ended over 1 day ago and has been automatically removed."
-                        ),
-                        read=False,
-                        ts=ts,
-                    ))
                 # Remove dependent records then the game itself
                 db.query(models.MatchApplication).filter(
                     models.MatchApplication.game_id == game.id
@@ -299,6 +702,55 @@ def run_migrations():
             )
             """
         ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                id VARCHAR PRIMARY KEY,
+                code VARCHAR UNIQUE NOT NULL,
+                coach_id VARCHAR NOT NULL,
+                group_id VARCHAR,
+                used BOOLEAN DEFAULT FALSE,
+                used_by_player_id VARCHAR,
+                created_at VARCHAR,
+                expires_at VARCHAR
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS coach_game_history (
+                id VARCHAR PRIMARY KEY,
+                coach_id VARCHAR NOT NULL,
+                game_id VARCHAR NOT NULL,
+                note VARCHAR,
+                result VARCHAR,
+                updated_at VARCHAR NOT NULL
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_coach_game_history_coach_game
+            ON coach_game_history (coach_id, game_id)
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS game_occurrence_confirmations (
+                id VARCHAR PRIMARY KEY,
+                game_id VARCHAR NOT NULL,
+                coach_id VARCHAR NOT NULL,
+                confirmed BOOLEAN DEFAULT FALSE,
+                updated_at VARCHAR NOT NULL
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_game_occurrence_confirmations_game_coach
+            ON game_occurrence_confirmations (game_id, coach_id)
+            """
+        ))
         if 'games' in existing_tables:
             game_cols = {c['name'] for c in insp.get_columns('games')}
             if 'deadline' not in game_cols:
@@ -319,6 +771,10 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE games ADD COLUMN is_private BOOLEAN DEFAULT FALSE"))
             if 'game_invite_code' not in game_cols:
                 conn.execute(text("ALTER TABLE games ADD COLUMN game_invite_code VARCHAR"))
+            if 'occurrence_counted' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN occurrence_counted BOOLEAN DEFAULT FALSE"))
+            if 'strict_age_match' not in game_cols:
+                conn.execute(text("ALTER TABLE games ADD COLUMN strict_age_match BOOLEAN DEFAULT FALSE"))
         if 'match_applications' in existing_tables:
             ma_cols = {c['name'] for c in insp.get_columns('match_applications')}
             if 'applicant_group_id' not in ma_cols:
@@ -337,8 +793,22 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE users ADD COLUMN default_location VARCHAR"))
             if 'default_club_id' not in user_cols2:
                 conn.execute(text("ALTER TABLE users ADD COLUMN default_club_id VARCHAR"))
+            if 'games_played_count' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN games_played_count INTEGER DEFAULT 0"))
             if 'verification_token' not in user_cols2:
                 conn.execute(text("ALTER TABLE users ADD COLUMN verification_token VARCHAR"))
+        if 'invite_codes' in existing_tables:
+            invite_cols = {c['name'] for c in insp.get_columns('invite_codes')}
+            if 'group_id' not in invite_cols:
+                conn.execute(text("ALTER TABLE invite_codes ADD COLUMN group_id VARCHAR"))
+            if 'used' not in invite_cols:
+                conn.execute(text("ALTER TABLE invite_codes ADD COLUMN used BOOLEAN DEFAULT FALSE"))
+            if 'used_by_player_id' not in invite_cols:
+                conn.execute(text("ALTER TABLE invite_codes ADD COLUMN used_by_player_id VARCHAR"))
+            if 'created_at' not in invite_cols:
+                conn.execute(text("ALTER TABLE invite_codes ADD COLUMN created_at VARCHAR"))
+            if 'expires_at' not in invite_cols:
+                conn.execute(text("ALTER TABLE invite_codes ADD COLUMN expires_at VARCHAR"))
         if 'team_groups' in existing_tables:
             tg_cols = {c['name'] for c in insp.get_columns('team_groups')}
             if 'invite_code' not in tg_cols:
@@ -359,6 +829,10 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE team_groups ADD COLUMN offline_players JSON DEFAULT '[]'::json"))
             if 'sport' not in tg_cols:
                 conn.execute(text("ALTER TABLE team_groups ADD COLUMN sport VARCHAR"))
+        if 'clubs' in existing_tables:
+            club_cols = {c['name'] for c in insp.get_columns('clubs')}
+            if 'default_location' not in club_cols:
+                conn.execute(text("ALTER TABLE clubs ADD COLUMN default_location VARCHAR"))
         # notifications table is created automatically by SQLAlchemy metadata
 
 def seed_database(db: Session):
@@ -435,11 +909,13 @@ class UserResponse(BaseModel):
     status: Optional[str] = None
     default_location: Optional[str] = None
     default_club_id: Optional[str] = None
+    games_played_count: int = 0
     verification_token: Optional[str] = None
     class Config:
         from_attributes = True
 
 class CoachProfileUpdate(BaseModel):
+    name: Optional[str] = None
     phone: Optional[str] = None
     defaultLocation: Optional[str] = None
     defaultClubId: Optional[str] = None
@@ -457,6 +933,7 @@ class GameCreate(BaseModel):
     contactPhone: Optional[str] = None
     homeGroupId: Optional[str] = None
     isPrivate: Optional[bool] = False
+    strictAgeMatch: Optional[bool] = False
 
 class GameUpdate(BaseModel):
     time: Optional[str] = None
@@ -468,10 +945,11 @@ class GameUpdate(BaseModel):
     contactPhone: Optional[str] = None
     opposingTeamId: Optional[str] = None
     status: Optional[str] = None
+    strictAgeMatch: Optional[bool] = None
 
 class GameResponse(BaseModel):
     id: str
-    creator_id: str
+    creator_id: Optional[str] = None
     sport: str
     time: str
     location: str
@@ -487,6 +965,8 @@ class GameResponse(BaseModel):
     home_group_id: Optional[str] = None
     is_private: Optional[bool] = False
     game_invite_code: Optional[str] = None
+    occurrence_counted: Optional[bool] = False
+    strict_age_match: Optional[bool] = False
     class Config:
         from_attributes = True
 
@@ -531,11 +1011,17 @@ class TeamGroupResponse(BaseModel):
 class ClubCreate(BaseModel):
     coachId: str
     name: str
+    defaultLocation: Optional[str] = None
+
+class ClubUpdate(BaseModel):
+    name: Optional[str] = None
+    defaultLocation: Optional[str] = None
 
 class ClubResponse(BaseModel):
     id: str
     coach_id: str
     name: str
+    default_location: Optional[str] = None
     class Config:
         from_attributes = True
 
@@ -588,6 +1074,51 @@ class RosterResponse(BaseModel):
     withdraw_reason: Optional[str] = None
     class Config:
         from_attributes = True
+
+class CoachPlayerNoteUpsert(BaseModel):
+    coachId: str
+    playerId: str
+    nickname: Optional[str] = None
+
+class CoachPlayerNoteResponse(BaseModel):
+    id: Optional[str] = None
+    coach_id: str
+    player_id: str
+    nickname: Optional[str] = None
+    class Config:
+        from_attributes = True
+
+class CoachGameHistorySyncPayload(BaseModel):
+    coachId: str
+    notes: dict[str, str] = {}
+    results: dict[str, str] = {}
+
+class CoachGameHistoryResponse(BaseModel):
+    coach_id: str
+    notes: dict[str, str]
+    results: dict[str, str]
+
+class GameOccurrenceConfirmationCreate(BaseModel):
+    coachId: str
+    confirmed: bool
+
+class GameOccurrenceConfirmationResponse(BaseModel):
+    id: str
+    game_id: str
+    coach_id: str
+    confirmed: bool
+    updated_at: str
+    peer_submitted: Optional[bool] = None
+    peer_confirmed: Optional[bool] = None
+    game_counted: Optional[bool] = None
+    class Config:
+        from_attributes = True
+
+class GameOccurrenceConfirmationResult(BaseModel):
+    confirmation: GameOccurrenceConfirmationResponse
+    game_counted: bool
+    creator_games_played_count: int
+    opposing_coach_games_played_count: Optional[int] = None
 
 class VolunteerAction(BaseModel):
     volunteerId: str
@@ -674,6 +1205,21 @@ def send_email_code_endpoint(
     background_tasks.add_task(_send_code_email_safe, email, code, "send_email_code")
     return {"ok": True}
 
+@app.post("/api/send_guardian_email_code")
+def send_guardian_email_code_endpoint(
+    body: SendCodeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+    code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    import time as _time
+    save_email_code(db, email, code, _time.time() + 600)
+    background_tasks.add_task(_send_code_email_safe, email, code, "send_guardian_email_code")
+    return {"ok": True}
+
 @app.post("/api/send_login_verify_code")
 def send_login_verify_code_endpoint(
     body: SendCodeRequest,
@@ -741,11 +1287,7 @@ def verify_email_code_endpoint(body: VerifyEmailCodeRequest, db: Session = Depen
 # --- Invite Codes (legacy one-time codes, kept for backward compatibility) ---
 
 def generate_unique_group_code(db: Session) -> str:
-    for _ in range(20):
-        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        if not db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first():
-            return code
-    return uuid.uuid4().hex[:8].upper()
+    return generate_unique_group_code_value(db)
 
 def generate_unique_offline_bind_code(db: Session) -> str:
     existing_codes: set[str] = set()
@@ -759,6 +1301,8 @@ def generate_unique_offline_bind_code(db: Session) -> str:
     for _ in range(30):
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         if code in existing_codes:
+            continue
+        if db.query(models.InviteCode).filter(models.InviteCode.code == code).first():
             continue
         if db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first():
             continue
@@ -777,35 +1321,34 @@ class InviteCodeResponse(BaseModel):
     used: bool
     used_by_player_id: Optional[str] = None
     created_at: str
+    expires_at: Optional[str] = None
     class Config:
         from_attributes = True
 
 @app.post("/api/invite_codes", response_model=InviteCodeResponse, status_code=201)
 def create_invite_code(body: InviteCodeCreate, db: Session = Depends(get_db)):
-    coach = db.query(models.User).filter(models.User.id == body.coachId, models.User.role == 'coach').first()
-    if not coach:
+    coach = db.query(models.User).filter(models.User.id == body.coachId).first()
+    if not has_user_role(coach, 'coach'):
         raise HTTPException(status_code=404, detail="Coach not found")
-    # Generate unique 8-char uppercase alphanumeric code
-    for _ in range(10):
-        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        if not db.query(models.InviteCode).filter(models.InviteCode.code == code).first():
-            break
-    new_code = models.InviteCode(
-        id=f"ic_{uuid.uuid4().hex[:8]}",
-        code=code,
-        coach_id=body.coachId,
-        group_id=body.groupId,
-        used=False,
-        created_at=datetime.utcnow().isoformat(),
-    )
-    db.add(new_code)
+    if not body.groupId:
+        raise HTTPException(status_code=400, detail="Group is required")
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == body.groupId).first()
+    if not group or group.coach_id != body.coachId:
+        raise HTTPException(status_code=404, detail="Group not found")
+    new_code = create_group_invite_record(db, group)
     db.commit()
     db.refresh(new_code)
     return new_code
 
 @app.get("/api/invite_codes", response_model=List[InviteCodeResponse])
 def get_invite_codes(coachId: str, db: Session = Depends(get_db)):
-    return db.query(models.InviteCode).filter(models.InviteCode.coach_id == coachId).all()
+    cleanup_expired_group_invites(db)
+    return (
+        db.query(models.InviteCode)
+        .filter(models.InviteCode.coach_id == coachId)
+        .order_by(models.InviteCode.created_at.desc())
+        .all()
+    )
 
 # --- Coach Invite Codes ---
 
@@ -825,7 +1368,7 @@ class CoachInviteCodeResponse(BaseModel):
 @app.post("/api/coach_invite_codes", response_model=CoachInviteCodeResponse, status_code=201)
 def create_coach_invite_code(body: CoachInviteCodeCreate, db: Session = Depends(get_db)):
     requester = db.query(models.User).filter(models.User.id == body.requesterId).first()
-    if not requester or requester.role not in ('coach', 'admin'):
+    if not requester or not (has_user_role(requester, 'coach') or has_user_role(requester, 'admin')):
         raise HTTPException(status_code=403, detail="只有教练或管理员才能生成教练邀请码 / Only coaches or admins can generate coach invite codes")
     for _ in range(20):
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
@@ -922,6 +1465,7 @@ class PlayerRegisterRequest(BaseModel):
     guardianName: Optional[str] = None
     guardianEmail: Optional[str] = None
     guardianPassword: Optional[str] = None
+    guardianEmailCode: Optional[str] = None
 
 def _calc_age(dob_str: str) -> Optional[int]:
     try:
@@ -930,6 +1474,56 @@ def _calc_age(dob_str: str) -> Optional[int]:
         return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     except Exception:
         return None
+
+
+def _auto_unbind_aged_out_players(db: Session) -> None:
+    settings = db.query(models.Settings).filter(models.Settings.id == 1).first()
+    underage_limit = settings.underage_limit if settings else 16
+    changed = False
+
+    players = (
+        db.query(models.User)
+        .filter(models.User.guardian_id.isnot(None))
+        .all()
+    )
+    for player in players:
+        age = _calc_age(player.dob) if player.dob else None
+        if age is None or age < underage_limit:
+            continue
+
+        guardian_id = player.guardian_id
+        player.guardian_id = None
+        changed = True
+
+        db.query(models.Roster).filter(
+            models.Roster.player_id == player.id,
+            models.Roster.status == "pending_guardian",
+        ).update(
+            {"status": "approved", "guardian_approved": False},
+            synchronize_session=False,
+        )
+
+        _add_notification(
+            db,
+            player.id,
+            "🎉 已自动解除监护绑定 / Guardian Unlinked",
+            (
+                f"You are now {age}, so guardian approval is no longer required. "
+                f"Your guardian link has been removed automatically."
+            ),
+        )
+        _add_notification(
+            db,
+            guardian_id,
+            "ℹ️ 球员已不再需要监护绑定 / Guardian Link Removed",
+            (
+                f"{player.name} is now {age} and no longer requires a guardian account, "
+                f"so the guardian link has been removed automatically."
+            ),
+        )
+
+    if changed:
+        db.commit()
 
 @app.post("/api/register", response_model=UserResponse, status_code=201)
 def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
@@ -942,10 +1536,7 @@ def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
     code = body.inviteCode.upper().strip()
-    # 1) Try regular team invite code first.
-    group = db.query(models.TeamGroup).filter(
-        models.TeamGroup.invite_code == code
-    ).first()
+    group, invite_record = find_group_by_active_invite_code(db, code)
     # 2) Fallback: dedicated bind code of an offline player placeholder.
     bound_offline_id: Optional[str] = None
     bound_offline_name: Optional[str] = None
@@ -978,28 +1569,37 @@ def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
     if is_underage:
         if not body.guardianName or not body.guardianEmail or not body.guardianPassword:
             raise HTTPException(status_code=400, detail=f"未满{underage_limit}岁的球员注册时必须同时注册监护人账号 / Players under {underage_limit} must register a guardian account")
+        guardian_email = body.guardianEmail.strip().lower()
+        if not is_email_code_valid(db, guardian_email, body.guardianEmailCode):
+            raise HTTPException(status_code=400, detail="监护人邮箱验证码无效或已过期 / Guardian email verification code is invalid or expired")
         if _INVALID_PWD_RE.search(body.guardianPassword):
             raise HTTPException(status_code=400, detail="监护人密码不能包含空格、<、>、引号 / Guardian password cannot contain spaces, <, >, or quotes")
         if len(body.guardianPassword) < 6:
             raise HTTPException(status_code=400, detail="监护人密码至少需要6位 / Guardian password must be at least 6 characters")
-        if db.query(models.User).filter(models.User.email == body.guardianEmail.strip().lower()).first():
-            raise HTTPException(status_code=400, detail="监护人邮箱已注册 / Guardian email already registered")
     # Get coach's sport
     coach = db.query(models.User).filter(models.User.id == group.coach_id).first()
     # Create guardian first if underage
     guardian_id = None
     if is_underage:
-        new_guardian = models.User(
-            id=f"g_{uuid.uuid4().hex[:8]}",
-            role='guardian',
-            name=body.guardianName,
-            email=body.guardianEmail.strip().lower(),
-            password=body.guardianPassword,
-            status='active',
-        )
-        db.add(new_guardian)
-        db.flush()
-        guardian_id = new_guardian.id
+        existing_guardian = db.query(models.User).filter(models.User.email == guardian_email).first()
+        if existing_guardian:
+            if existing_guardian.password != body.guardianPassword:
+                raise HTTPException(status_code=400, detail="监护人邮箱已存在，请输入该账号当前密码以完成关联 / Guardian email already exists; enter the existing account password to link it")
+            if not has_user_role(existing_guardian, 'guardian'):
+                existing_guardian.role = append_user_role(existing_guardian.role, 'guardian')
+            guardian_id = existing_guardian.id
+        else:
+            new_guardian = models.User(
+                id=f"g_{uuid.uuid4().hex[:8]}",
+                role='guardian',
+                name=body.guardianName,
+                email=guardian_email,
+                password=body.guardianPassword,
+                status='active',
+            )
+            db.add(new_guardian)
+            db.flush()
+            guardian_id = new_guardian.id
     new_player = models.User(
         id=f"p_{uuid.uuid4().hex[:8]}",
         role='player',
@@ -1020,6 +1620,8 @@ def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
     if new_player.id not in ids:
         ids.append(new_player.id)
     group.player_ids = ids
+    if invite_record:
+        consume_group_invite_code(db, invite_record, new_player.id)
     # If registered via dedicated offline bind code, consume the placeholder
     # (which also removes that one-time bind code from DB state).
     if bound_offline_id:
@@ -1054,6 +1656,7 @@ def check_email(email: str, db: Session = Depends(get_db)):
 
 @app.get("/api/users", response_model=List[UserResponse])
 def get_all_users(db: Session = Depends(get_db)):
+    _auto_unbind_aged_out_players(db)
     return db.query(models.User).all()
 
 @app.post("/api/users", response_model=UserResponse, status_code=201)
@@ -1083,6 +1686,10 @@ def update_coach_profile(user_id: str, data: CoachProfileUpdate, db: Session = D
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if data.name is not None:
+        stripped_name = data.name.strip()
+        if stripped_name:
+            user.name = stripped_name
     if data.phone is not None:
         user.phone = data.phone.strip() or None
     if data.defaultLocation is not None:
@@ -1121,6 +1728,181 @@ def change_password(user_id: str, data: ChangePasswordRequest, db: Session = Dep
     delete_email_code(db, email_key)
     send_password_changed_email(user.email, user.name)
     return {"ok": True}
+
+
+@app.delete("/api/users/{user_id}", status_code=204)
+def delete_user_account(user_id: str, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        roles = set(parse_user_roles(user.role))
+        if "player" in roles:
+            _cleanup_deleted_player(db, user)
+        if "guardian" in roles:
+            _cleanup_deleted_guardian(db, user)
+        if "coach" in roles:
+            _cleanup_deleted_coach(db, user)
+
+        db.query(models.GameOccurrenceConfirmation).filter(
+            models.GameOccurrenceConfirmation.coach_id == user.id
+        ).delete(synchronize_session=False)
+        db.query(models.CoachGameHistory).filter(
+            models.CoachGameHistory.coach_id == user.id
+        ).delete(synchronize_session=False)
+        db.query(models.InviteCode).filter(
+            models.InviteCode.coach_id == user.id
+        ).delete(synchronize_session=False)
+        db.query(models.CoachInviteCode).filter(
+            models.CoachInviteCode.created_by_id == user.id
+        ).delete(synchronize_session=False)
+
+        db.query(models.Notification).filter(
+            models.Notification.target_user_id == user.id
+        ).delete(synchronize_session=False)
+        db.delete(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+@app.get("/api/coach_player_notes", response_model=List[CoachPlayerNoteResponse])
+def get_coach_player_notes(coachId: str, db: Session = Depends(get_db)):
+    return (
+        db.query(models.CoachPlayerNote)
+        .filter(models.CoachPlayerNote.coach_id == coachId)
+        .all()
+    )
+
+@app.put("/api/coach_player_notes", response_model=CoachPlayerNoteResponse)
+def upsert_coach_player_note(data: CoachPlayerNoteUpsert, db: Session = Depends(get_db)):
+    coach = db.query(models.User).filter(models.User.id == data.coachId).first()
+    if not coach or not has_user_role(coach, 'coach'):
+        raise HTTPException(status_code=404, detail="Coach not found")
+
+    player_key = (data.playerId or "").strip()
+    if not player_key:
+        raise HTTPException(status_code=400, detail="Player id is required")
+
+    nickname = (data.nickname or "").strip()
+    existing = (
+        db.query(models.CoachPlayerNote)
+        .filter(
+            models.CoachPlayerNote.coach_id == data.coachId,
+            models.CoachPlayerNote.player_id == player_key,
+        )
+        .first()
+    )
+
+    if not nickname:
+        if existing:
+            db.delete(existing)
+            db.commit()
+        return {
+            "coach_id": data.coachId,
+            "player_id": player_key,
+            "nickname": None,
+        }
+
+    if existing:
+        existing.nickname = nickname
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    created = models.CoachPlayerNote(
+        id=f"cpn_{uuid.uuid4().hex[:8]}",
+        coach_id=data.coachId,
+        player_id=player_key,
+        nickname=nickname,
+    )
+    db.add(created)
+    db.commit()
+    db.refresh(created)
+    return created
+
+@app.get("/api/coach_game_history", response_model=CoachGameHistoryResponse)
+def get_coach_game_history(coachId: str, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.CoachGameHistory)
+        .filter(models.CoachGameHistory.coach_id == coachId)
+        .all()
+    )
+    notes: dict[str, str] = {}
+    results: dict[str, str] = {}
+    for row in rows:
+        game_id = (row.game_id or "").strip()
+        if not game_id:
+            continue
+        note = (row.note or "").strip()
+        if note:
+            notes[game_id] = note
+        if row.result in ("win", "lose"):
+            results[game_id] = row.result
+    return {
+        "coach_id": coachId,
+        "notes": notes,
+        "results": results,
+    }
+
+@app.put("/api/coach_game_history", response_model=CoachGameHistoryResponse)
+def sync_coach_game_history(data: CoachGameHistorySyncPayload, db: Session = Depends(get_db)):
+    coach = db.query(models.User).filter(models.User.id == data.coachId).first()
+    if not coach or not has_user_role(coach, 'coach'):
+        raise HTTPException(status_code=404, detail="Coach not found")
+
+    normalized_notes: dict[str, str] = {}
+    for game_id, note in (data.notes or {}).items():
+        key = str(game_id or "").strip()
+        text_note = str(note or "").strip()
+        if key and text_note:
+            normalized_notes[key] = text_note
+
+    normalized_results: dict[str, str] = {}
+    for game_id, result in (data.results or {}).items():
+        key = str(game_id or "").strip()
+        value = str(result or "").strip().lower()
+        if key and value in ("win", "lose"):
+            normalized_results[key] = value
+
+    all_game_ids = set(normalized_notes.keys()) | set(normalized_results.keys())
+    existing_rows = (
+        db.query(models.CoachGameHistory)
+        .filter(models.CoachGameHistory.coach_id == data.coachId)
+        .all()
+    )
+    existing_by_game_id = {row.game_id: row for row in existing_rows}
+    now_iso = datetime.utcnow().isoformat()
+
+    for game_id in all_game_ids:
+        row = existing_by_game_id.get(game_id)
+        note_val = normalized_notes.get(game_id)
+        result_val = normalized_results.get(game_id)
+        if row:
+            row.note = note_val
+            row.result = result_val
+            row.updated_at = now_iso
+            continue
+        db.add(models.CoachGameHistory(
+            id=f"cgh_{uuid.uuid4().hex[:12]}",
+            coach_id=data.coachId,
+            game_id=game_id,
+            note=note_val,
+            result=result_val,
+            updated_at=now_iso,
+        ))
+
+    for row in existing_rows:
+        if row.game_id not in all_game_ids:
+            db.delete(row)
+
+    db.commit()
+    return {
+        "coach_id": data.coachId,
+        "notes": normalized_notes,
+        "results": normalized_results,
+    }
 
 class ResetPasswordByEmailRequest(BaseModel):
     email: str
@@ -1164,6 +1946,25 @@ def get_game_by_invite(code: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Game not found")
     return game
 
+@app.get("/api/games/history", response_model=List[GameResponse])
+def get_coach_past_games(coachId: str, db: Session = Depends(get_db)):
+    """Return all past games (any status) involving this coach, for the history view."""
+    games = db.query(models.Game).filter(
+        (models.Game.creator_id == coachId) | (models.Game.opposing_team_id == coachId)
+    ).all()
+    now = datetime.utcnow()
+    past_games = []
+    for g in games:
+        try:
+            game_dt = datetime.fromisoformat(g.time)
+            end_of_day = game_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+            if now > end_of_day:
+                past_games.append(g)
+        except Exception:
+            pass
+    past_games.sort(key=lambda g: g.time, reverse=True)
+    return past_games
+
 @app.post("/api/games", response_model=GameResponse, status_code=201)
 def create_game(game: GameCreate, db: Session = Depends(get_db)):
     new_game = models.Game(
@@ -1182,6 +1983,8 @@ def create_game(game: GameCreate, db: Session = Depends(get_db)):
         volunteers=[],
         is_private=game.isPrivate or False,
         game_invite_code=(''.join(random.choices(string.ascii_uppercase + string.digits, k=8)) if game.isPrivate else None),
+        occurrence_counted=False,
+        strict_age_match=bool(game.strictAgeMatch),
     )
     db.add(new_game)
     db.commit()
@@ -1211,6 +2014,11 @@ def update_game(game_id: str, game_data: GameUpdate, db: Session = Depends(get_d
         game.opposing_team_id = game_data.opposingTeamId
     if game_data.status is not None:
         game.status = game_data.status
+    if game_data.strictAgeMatch is not None:
+        game.strict_age_match = bool(game_data.strictAgeMatch)
+    # Increment games played count immediately when game is locked (both coaches agreed)
+    if game_data.status == "locked" and game.opposing_team_id and not game.occurrence_counted:
+        _apply_game_played_count(game, db)
     db.commit()
     db.refresh(game)
     return game
@@ -1220,10 +2028,9 @@ def delete_game(game_id: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).filter(models.Game.id == game_id).first()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    if game.status == "locked":
-        raise HTTPException(status_code=400, detail="Cannot delete a locked game")
+    db.query(models.GameOccurrenceConfirmation).filter(models.GameOccurrenceConfirmation.game_id == game_id).delete(synchronize_session=False)
     db.query(models.MatchApplication).filter(models.MatchApplication.game_id == game_id).delete(synchronize_session=False)
-    db.query(models.RosterEntry).filter(models.RosterEntry.game_id == game_id).delete(synchronize_session=False)
+    db.query(models.Roster).filter(models.Roster.game_id == game_id).delete(synchronize_session=False)
     db.delete(game)
     db.commit()
 
@@ -1283,12 +2090,14 @@ def create_team_group(group: TeamGroupCreate, db: Session = Depends(get_db)):
         team_name=normalized_team_name,
         age_group=group.ageGroup,
         player_ids=group.playerIds or [],
-        invite_code=generate_unique_group_code(db),
+        invite_code=None,
         gender=group.gender or None,
         club_id=group.clubId or None,
         sport=group.sport or None,
     )
     db.add(new_group)
+    db.flush()
+    create_group_invite_record(db, new_group)
     db.commit()
     db.refresh(new_group)
     return new_group
@@ -1320,10 +2129,10 @@ def join_team_group_by_invite(data: JoinTeamByInviteRequest, db: Session = Depen
     player = db.query(models.User).filter(models.User.id == data.playerId).first()
     if not player:
         raise HTTPException(status_code=404, detail="球员不存在 / Player not found")
-    if player.role != 'player':
+    if not has_user_role(player, 'player'):
         raise HTTPException(status_code=400, detail="仅球员可加入队伍 / Only players can join teams")
 
-    group = db.query(models.TeamGroup).filter(models.TeamGroup.invite_code == code).first()
+    group, invite_record = find_group_by_active_invite_code(db, code)
     if not group:
         raise HTTPException(status_code=404, detail="邀请码无效 / Invalid invite code")
 
@@ -1339,6 +2148,11 @@ def join_team_group_by_invite(data: JoinTeamByInviteRequest, db: Session = Depen
             read=False,
             ts=datetime.utcnow().isoformat(),
         ))
+        if invite_record:
+            consume_group_invite_code(db, invite_record, data.playerId)
+        db.commit()
+    elif invite_record:
+        consume_group_invite_code(db, invite_record, data.playerId)
         db.commit()
     db.refresh(group)
     return group
@@ -1348,10 +2162,36 @@ def get_group_invite_code(group_id: str, db: Session = Depends(get_db)):
     group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    ensure_legacy_group_invite_record(db, group)
+    sync_group_latest_invite_code(db, group)
     if not group.invite_code:
-        group.invite_code = generate_unique_group_code(db)
+        create_group_invite_record(db, group)
         db.commit()
-    return {"code": group.invite_code, "group_id": group.id, "group_name": group.name}
+        db.refresh(group)
+    return {"code": group.invite_code, "group_id": group.id, "group_name": group.team_name}
+
+@app.get("/api/team_groups/{group_id}/invite_codes", response_model=List[InviteCodeResponse])
+def get_group_invite_codes(group_id: str, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    ensure_legacy_group_invite_record(db, group)
+    invites = get_active_group_invites(db, group_id)
+    sync_group_latest_invite_code(db, group)
+    db.commit()
+    return invites
+
+@app.post("/api/team_groups/{group_id}/invite_codes", response_model=InviteCodeResponse, status_code=201)
+def generate_group_invite_code(group_id: str, body: InviteCodeCreate, db: Session = Depends(get_db)):
+    group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if group.coach_id != body.coachId:
+        raise HTTPException(status_code=403, detail="Only the group coach can generate invite codes")
+    invite = create_group_invite_record(db, group)
+    db.commit()
+    db.refresh(invite)
+    return invite
 
 @app.put("/api/team_groups/{group_id}", response_model=TeamGroupResponse)
 def update_team_group(group_id: str, data: TeamGroupUpdate, db: Session = Depends(get_db)):
@@ -1373,6 +2213,11 @@ def delete_team_group(group_id: str, db: Session = Depends(get_db)):
     group = db.query(models.TeamGroup).filter(models.TeamGroup.id == group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    # Clean up FK references before deleting the group
+    db.query(models.InviteCode).filter(models.InviteCode.group_id == group_id).delete(synchronize_session=False)
+    db.query(models.MatchApplication).filter(models.MatchApplication.applicant_group_id == group_id).delete(synchronize_session=False)
+    db.query(models.Game).filter(models.Game.home_group_id == group_id).update({"home_group_id": None}, synchronize_session=False)
+    db.query(models.Game).filter(models.Game.opposing_group_id == group_id).update({"opposing_group_id": None}, synchronize_session=False)
     db.delete(group)
     db.commit()
 
@@ -1442,11 +2287,25 @@ def create_club(club: ClubCreate, db: Session = Depends(get_db)):
         id=f"cl_{uuid.uuid4().hex[:8]}",
         coach_id=club.coachId,
         name=club.name.strip(),
+        default_location=club.defaultLocation.strip() if club.defaultLocation else None,
     )
     db.add(new_club)
     db.commit()
     db.refresh(new_club)
     return new_club
+
+@app.put("/api/clubs/{club_id}", response_model=ClubResponse)
+def update_club(club_id: str, club: ClubUpdate, db: Session = Depends(get_db)):
+    record = db.query(models.Club).filter(models.Club.id == club_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Club not found")
+    if club.name is not None:
+        record.name = club.name.strip() or record.name
+    if club.defaultLocation is not None:
+        record.default_location = club.defaultLocation.strip() or None
+    db.commit()
+    db.refresh(record)
+    return record
 
 @app.delete("/api/clubs/{club_id}", status_code=204)
 def delete_club(club_id: str, db: Session = Depends(get_db)):
@@ -1458,6 +2317,149 @@ def delete_club(club_id: str, db: Session = Depends(get_db)):
     db.delete(club)
     db.commit()
 
+# --- Game Occurrence Confirmations ---
+
+@app.get("/api/game_occurrence_confirmations", response_model=List[GameOccurrenceConfirmationResponse])
+def get_game_occurrence_confirmations(coachId: str, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.GameOccurrenceConfirmation)
+        .filter(models.GameOccurrenceConfirmation.coach_id == coachId)
+        .all()
+    )
+    result = []
+    for row in rows:
+        game = db.query(models.Game).filter(models.Game.id == row.game_id).first()
+        peer_submitted = False
+        peer_confirmed = False
+        game_counted = False
+        if game:
+            peer_id = (
+                game.opposing_team_id if coachId == game.creator_id else game.creator_id
+            )
+            if peer_id:
+                peer_row = (
+                    db.query(models.GameOccurrenceConfirmation)
+                    .filter(
+                        models.GameOccurrenceConfirmation.game_id == row.game_id,
+                        models.GameOccurrenceConfirmation.coach_id == peer_id,
+                    )
+                    .first()
+                )
+                peer_submitted = peer_row is not None
+                peer_confirmed = bool(peer_row.confirmed) if peer_row else False
+            game_counted = bool(game.occurrence_counted)
+
+        result.append(
+            {
+                "id": row.id,
+                "game_id": row.game_id,
+                "coach_id": row.coach_id,
+                "confirmed": bool(row.confirmed),
+                "updated_at": row.updated_at,
+                "peer_submitted": peer_submitted,
+                "peer_confirmed": peer_confirmed,
+                "game_counted": game_counted,
+            }
+        )
+    return result
+
+def _apply_game_played_count(game: models.Game, db: Session) -> tuple[int, Optional[int]]:
+    creator = db.query(models.User).filter(models.User.id == game.creator_id).first()
+    opponent = (
+        db.query(models.User).filter(models.User.id == game.opposing_team_id).first()
+        if game.opposing_team_id
+        else None
+    )
+    if creator:
+        creator.games_played_count = int(creator.games_played_count or 0) + 1
+    if opponent and opponent.id != game.creator_id:
+        opponent.games_played_count = int(opponent.games_played_count or 0) + 1
+    game.occurrence_counted = True
+    db.flush()
+    creator_count = int(creator.games_played_count or 0) if creator else 0
+    opponent_count = int(opponent.games_played_count or 0) if opponent else None
+    return creator_count, opponent_count
+
+@app.post("/api/games/{game_id}/occurrence_confirmation", response_model=GameOccurrenceConfirmationResult)
+def upsert_game_occurrence_confirmation(
+    game_id: str,
+    data: GameOccurrenceConfirmationCreate,
+    db: Session = Depends(get_db),
+):
+    game = db.query(models.Game).filter(models.Game.id == game_id).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if data.coachId not in {game.creator_id, game.opposing_team_id}:
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    now_iso = datetime.utcnow().isoformat()
+    row = (
+        db.query(models.GameOccurrenceConfirmation)
+        .filter(
+            models.GameOccurrenceConfirmation.game_id == game_id,
+            models.GameOccurrenceConfirmation.coach_id == data.coachId,
+        )
+        .first()
+    )
+    if row:
+        row.confirmed = bool(data.confirmed)
+        row.updated_at = now_iso
+    else:
+        row = models.GameOccurrenceConfirmation(
+            id=f"goc_{uuid.uuid4().hex[:8]}",
+            game_id=game_id,
+            coach_id=data.coachId,
+            confirmed=bool(data.confirmed),
+            updated_at=now_iso,
+        )
+        db.add(row)
+    db.flush()
+
+    creator_confirmed = (
+        db.query(models.GameOccurrenceConfirmation)
+        .filter(
+            models.GameOccurrenceConfirmation.game_id == game_id,
+            models.GameOccurrenceConfirmation.coach_id == game.creator_id,
+            models.GameOccurrenceConfirmation.confirmed == True,
+        )
+        .first()
+    )
+    opponent_confirmed = (
+        db.query(models.GameOccurrenceConfirmation)
+        .filter(
+            models.GameOccurrenceConfirmation.game_id == game_id,
+            models.GameOccurrenceConfirmation.coach_id == game.opposing_team_id,
+            models.GameOccurrenceConfirmation.confirmed == True,
+        )
+        .first()
+        if game.opposing_team_id
+        else None
+    )
+
+    creator_count: int
+    opponent_count: Optional[int]
+    if creator_confirmed and opponent_confirmed and not game.occurrence_counted:
+        creator_count, opponent_count = _apply_game_played_count(game, db)
+    else:
+        creator = db.query(models.User).filter(models.User.id == game.creator_id).first()
+        opponent = (
+            db.query(models.User).filter(models.User.id == game.opposing_team_id).first()
+            if game.opposing_team_id
+            else None
+        )
+        creator_count = int(creator.games_played_count or 0) if creator else 0
+        opponent_count = int(opponent.games_played_count or 0) if opponent else None
+
+    db.commit()
+    db.refresh(row)
+    db.refresh(game)
+    return {
+        "confirmation": row,
+        "game_counted": bool(game.occurrence_counted),
+        "creator_games_played_count": creator_count,
+        "opposing_coach_games_played_count": opponent_count,
+    }
+
 # --- Match Applications ---
 
 @app.get("/api/match_applications", response_model=List[MatchApplicationResponse])
@@ -1466,6 +2468,22 @@ def get_all_match_applications(db: Session = Depends(get_db)):
 
 @app.post("/api/match_applications", response_model=MatchApplicationResponse, status_code=201)
 def create_match_application(app_data: MatchApplicationCreate, db: Session = Depends(get_db)):
+    game = db.query(models.Game).filter(models.Game.id == app_data.gameId).first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    applicant_group = None
+    if app_data.applicantGroupId:
+        applicant_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == app_data.applicantGroupId).first()
+
+    if bool(game.strict_age_match):
+        if not applicant_group:
+            raise HTTPException(status_code=400, detail="该比赛仅允许年龄组匹配的队伍申请 / This match only accepts age-matched team applications")
+        game_ages = parse_age_groups(game.age_group)
+        group_ages = parse_age_groups(applicant_group.age_group)
+        if game_ages and group_ages and not any(age in group_ages for age in game_ages):
+            raise HTTPException(status_code=400, detail="该比赛仅允许年龄组匹配的队伍申请 / This match only accepts age-matched team applications")
+
     existing = db.query(models.MatchApplication).filter(
         models.MatchApplication.game_id == app_data.gameId,
         models.MatchApplication.applicant_coach_id == app_data.applicantCoachId,
@@ -1482,11 +2500,7 @@ def create_match_application(app_data: MatchApplicationCreate, db: Session = Dep
     db.add(new_app)
 
     # Notify game owner that a new opponent application has arrived.
-    game = db.query(models.Game).filter(models.Game.id == app_data.gameId).first()
     applicant = db.query(models.User).filter(models.User.id == app_data.applicantCoachId).first()
-    applicant_group = None
-    if app_data.applicantGroupId:
-        applicant_group = db.query(models.TeamGroup).filter(models.TeamGroup.id == app_data.applicantGroupId).first()
 
     if game and game.creator_id and game.creator_id != app_data.applicantCoachId:
         game_label = f"{game.sport} @ {game.location} ({game.time})"
@@ -1496,8 +2510,14 @@ def create_match_application(app_data: MatchApplicationCreate, db: Session = Dep
         db.add(models.Notification(
             id=f"n_{uuid.uuid4().hex[:12]}",
             target_user_id=game.creator_id,
-            title="📥 新对战申请 / New Match Application",
-            body=f"{applicant_name} applied to your game \"{game_label}\" with team {team_name} ({age_gender}).",
+            title=_notif_i18n("notifMatchApplicationTitle"),
+            body=_notif_i18n(
+                "notifBodyMatchApplicationDetailed",
+                coach=applicant_name,
+                gameLabel=game_label,
+                teamName=team_name,
+                ageGender=age_gender,
+            ),
             read=False,
             ts=datetime.utcnow().isoformat(),
         ))
@@ -1641,6 +2661,7 @@ def update_settings(data: SettingsUpdate, db: Session = Depends(get_db)):
     else:
         settings.underage_limit = data.underageLimit
     db.commit()
+    _auto_unbind_aged_out_players(db)
     db.refresh(settings)
     return settings
 

@@ -5,24 +5,29 @@
 import { Calendar, Check } from "lucide-react-native";
 import React, { useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Linking,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, mapGame } from "../api";
 import { C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
-import { sendAppNotification } from "../storage";
+import { clearLoggedInUserId, notifI18n, sendAppNotification } from "../storage";
 import { Club, Game, RosterEntry, TeamGroup, User } from "../types";
 
 interface GuardianState {
   currentUser: User;
+  setCurrentUser: React.Dispatch<React.SetStateAction<User | null>>;
+  guardianProfileOpen: boolean;
+  setGuardianProfileOpen: (v: boolean) => void;
   games: Game[];
   setGames: React.Dispatch<React.SetStateAction<Game[]>>;
   rosters: RosterEntry[];
@@ -36,6 +41,9 @@ interface GuardianState {
 export default function GuardianScreen({ state }: { state: GuardianState }) {
   const {
     currentUser,
+    setCurrentUser,
+    guardianProfileOpen,
+    setGuardianProfileOpen,
     games,
     setGames,
     rosters,
@@ -86,8 +94,12 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
       if (coachId) {
         sendAppNotification(
           coachId,
-          "🛡 家长已批准 / Guardian Approved / Εγκρίθηκε από Κηδεμόνα",
-          `${currentUser.name} approved ${child?.name ?? "a player"} for "${gameLabel}". Awaiting your final approval.`,
+          `🛡 ${notifI18n("notifGuardianApprovedTitle")}`,
+          notifI18n("notifBodyGuardianApproved", {
+            guardian: currentUser.name,
+            child: child?.name ?? "a player",
+            gameLabel,
+          }),
         );
       }
     } catch (err: any) {
@@ -116,7 +128,87 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
     }
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(t("deleteAccountTitle"), t("deleteAccountGuardianConfirm"), [
+      { text: t("calCancel"), style: "cancel" },
+      {
+        text: t("deleteAccountBtn"),
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await apiFetch(`/users/${currentUser.id}`, { method: "DELETE" });
+            showToast(t("accountDeleted"));
+            await clearLoggedInUserId();
+            setCurrentUser(null);
+          } catch (err: any) {
+            showToast("Failed: " + err.message);
+          }
+        },
+      },
+    ]);
+  };
+
   const insets = useSafeAreaInsets();
+  const GuardianProfileScreen = () => (
+    <Modal
+      visible={guardianProfileOpen}
+      animationType="slide"
+      onRequestClose={() => setGuardianProfileOpen(false)}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, backgroundColor: C.slate50 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <View
+          style={{
+            paddingTop: insets.top + 8,
+            paddingHorizontal: 20,
+            paddingBottom: 12,
+            backgroundColor: C.white,
+            borderBottomWidth: 1,
+            borderBottomColor: C.slate200,
+            flexDirection: "row",
+            alignItems: "center",
+          }}
+        >
+          <TouchableOpacity
+            onPress={() => setGuardianProfileOpen(false)}
+            hitSlop={12}
+            style={{ marginRight: 12 }}
+          >
+            <Text style={{ fontSize: 16, color: C.blue }}>{t("profileBack")}</Text>
+          </TouchableOpacity>
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: "700",
+              color: C.slate800,
+              flex: 1,
+            }}
+          >
+            {t("profilePersonalInfo")}
+          </Text>
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 14, paddingBottom: 60 }}>
+          <View style={s.card}>
+            <Text style={{ fontSize: 10, color: C.slate500, fontWeight: "700" }}>
+              {t("profileInfoBanner")}
+            </Text>
+            <Text style={[s.cardTitle, { marginTop: 8 }]}>{currentUser.name}</Text>
+            <Text style={s.metaText}>{currentUser.email}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={[s.volunteerBtn, { backgroundColor: C.red }]}
+            onPress={handleDeleteAccount}
+          >
+            <Text style={s.volunteerBtnText}>{t("deleteAccountBtn")}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
 
   return (
     <KeyboardAvoidingView
@@ -351,6 +443,7 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
           onPress={() => setTab("schedule")}
         />
       </View>
+      <GuardianProfileScreen />
     </KeyboardAvoidingView>
   );
 }

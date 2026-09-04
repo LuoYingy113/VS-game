@@ -4,16 +4,16 @@
  */
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { API_BASE_URL, mapUser } from "../api";
 import { C, LangSwitcher } from "../components/shared";
@@ -139,6 +139,10 @@ export default function LoginScreen({ onLogin }: Props) {
   const [guardianEmail, setGuardianEmail] = useState("");
   const [guardianPassword, setGuardianPassword] = useState("");
   const [showGuardianPwd, setShowGuardianPwd] = useState(false);
+  const [guardianEmailCode, setGuardianEmailCode] = useState("");
+  const [sendingGuardianCode, setSendingGuardianCode] = useState(false);
+  const [guardianCodeSent, setGuardianCodeSent] = useState(false);
+  const [guardianCodeError, setGuardianCodeError] = useState("");
 
   // Extra reg fields
   const [regPhone, setRegPhone] = useState("");
@@ -274,6 +278,32 @@ export default function LoginScreen({ onLogin }: Props) {
     }
   };
 
+  const sendGuardianEmailCode = async () => {
+    if (!guardianEmail.trim() || !guardianEmail.includes("@")) {
+      setGuardianCodeError(t("labelGuardianEmail"));
+      return;
+    }
+    setSendingGuardianCode(true);
+    setGuardianCodeError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/send_guardian_email_code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: guardianEmail.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setGuardianCodeError(data.detail || t("errRegFailed"));
+        return;
+      }
+      setGuardianCodeSent(true);
+    } catch {
+      setGuardianCodeError(t("errCannotConnect"));
+    } finally {
+      setSendingGuardianCode(false);
+    }
+  };
+
   const handleRegister = async () => {
     if (
       !regName.trim() ||
@@ -315,6 +345,10 @@ export default function LoginScreen({ onLogin }: Props) {
         setRegError(t("errGuardianPwdTooShort"));
         return;
       }
+      if (!guardianEmailCode.trim()) {
+        setRegError(t("errGuardianCodeRequired"));
+        return;
+      }
     }
     if (!emailCode.trim()) {
       setRegError(t("errCodeRequired"));
@@ -351,6 +385,7 @@ export default function LoginScreen({ onLogin }: Props) {
                   guardianName: guardianName.trim(),
                   guardianEmail: guardianEmail.trim(),
                   guardianPassword,
+                  guardianEmailCode: normalizeEmailCode(guardianEmailCode),
                 }
               : {}),
           };
@@ -806,6 +841,9 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianName("");
                   setGuardianEmail("");
                   setGuardianPassword("");
+                  setGuardianEmailCode("");
+                  setGuardianCodeSent(false);
+                  setGuardianCodeError("");
                   setEmailCode("");
                   setCodeSent(false);
                   setCodeError("");
@@ -832,6 +870,9 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianName("");
                   setGuardianEmail("");
                   setGuardianPassword("");
+                  setGuardianEmailCode("");
+                  setGuardianCodeSent(false);
+                  setGuardianCodeError("");
                   setEmailCode("");
                   setCodeSent(false);
                   setCodeError("");
@@ -1043,11 +1084,54 @@ export default function LoginScreen({ onLogin }: Props) {
                 <TextInput
                   style={styles.input}
                   value={guardianEmail}
-                  onChangeText={setGuardianEmail}
+                  onChangeText={(v) => {
+                    setGuardianEmail(v);
+                    setGuardianEmailCode("");
+                    setGuardianCodeSent(false);
+                    setGuardianCodeError("");
+                  }}
                   placeholder="guardian@email.com"
                   keyboardType="email-address"
                   autoCapitalize="none"
                 />
+
+                <TouchableOpacity
+                  style={[
+                    styles.sendCodeBtn,
+                    (sendingGuardianCode || guardianCodeSent) && styles.disabledBtn,
+                  ]}
+                  onPress={sendGuardianEmailCode}
+                  disabled={sendingGuardianCode || guardianCodeSent}
+                >
+                  <Text style={styles.sendCodeBtnText}>
+                    {sendingGuardianCode
+                      ? t("verifyEmailResending")
+                      : guardianCodeSent
+                        ? "✓ " + t("btnSendCode")
+                        : t("btnSendCode")}
+                  </Text>
+                </TouchableOpacity>
+                {guardianCodeSent && (
+                  <Text style={[styles.hint, { color: C.green }]}>
+                    {t("codeSentHint")}
+                  </Text>
+                )}
+                {!!guardianCodeError && (
+                  <Text style={styles.errorText}>⚠ {guardianCodeError}</Text>
+                )}
+
+                <Text style={[styles.label, { marginTop: 12 }]}> 
+                  {t("labelGuardianEmailCode")} *
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  value={guardianEmailCode}
+                  onChangeText={(v) => setGuardianEmailCode(normalizeEmailCode(v))}
+                  placeholder="000000"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                />
+                <Text style={styles.hint}>{t("hintGuardianEmailCode")}</Text>
 
                 <Text style={[styles.label, { marginTop: 12 }]}>
                   {t("labelGuardianPwd")} *

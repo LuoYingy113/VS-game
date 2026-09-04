@@ -1,13 +1,32 @@
 import {
-    AdminSettings,
-    Club,
-    Game,
-    MatchApplication,
-    OfflinePlayer,
-    RosterEntry,
-    TeamGroup,
-    User,
+  AdminSettings,
+  AppRole,
+  Club,
+  CoachPlayerNote,
+  Game,
+  MatchApplication,
+  OfflinePlayer,
+  RosterEntry,
+  TeamGroup,
+  User,
 } from "./types";
+
+const KNOWN_ROLES: AppRole[] = ["coach", "player", "guardian", "admin"];
+
+function parseUserRoles(rawRole: unknown): AppRole[] {
+  const rawTokens = Array.isArray(rawRole)
+    ? rawRole.map((v) => String(v))
+    : String(rawRole || "")
+        .split(/[\s,，;|/]+/)
+        .map((v) => v.trim())
+        .filter(Boolean);
+  const roles = rawTokens
+    .map((token) => token.toLowerCase())
+    .filter((token): token is AppRole =>
+      KNOWN_ROLES.includes(token as AppRole),
+    );
+  return Array.from(new Set(roles));
+}
 
 // ==========================================
 // 后端 API 配置（来自 .env: EXPO_PUBLIC_API_BASE_URL）
@@ -70,20 +89,29 @@ export const apiFetch = async (
 // ==========================================
 // 数据映射 (snake_case → camelCase)
 // ==========================================
-export const mapUser = (u: any): User => ({
-  id: u.id,
-  role: u.role,
-  name: u.name,
-  email: u.email,
-  phone: u.phone || null,
-  dob: u.dob || null,
-  guardianId: u.guardian_id || null,
-  bio: u.bio || null,
-  sport: u.sport || null,
-  status: u.status || "active",
-  defaultLocation: u.default_location || null,
-  defaultClubId: u.default_club_id || null,
-});
+export const mapUser = (u: any): User => {
+  const rolesFromRole = parseUserRoles(u.role);
+  const rolesFromAvailable = parseUserRoles(u.available_roles ?? u.availableRoles);
+  const availableRoles = Array.from(
+    new Set([...rolesFromAvailable, ...rolesFromRole]),
+  );
+  return {
+    id: u.id,
+    role: availableRoles[0] || "player",
+    availableRoles: availableRoles.length > 0 ? availableRoles : ["player"],
+    name: u.name,
+    email: u.email,
+    phone: u.phone || null,
+    dob: u.dob || null,
+    guardianId: u.guardian_id || null,
+    bio: u.bio || null,
+    sport: u.sport || null,
+    status: u.status || "active",
+    defaultLocation: u.default_location || null,
+    defaultClubId: u.default_club_id || null,
+    gamesPlayedCount: Number(u.games_played_count ?? 0) || 0,
+  };
+};
 
 export const mapGame = (g: any): Game => ({
   id: g.id,
@@ -103,6 +131,8 @@ export const mapGame = (g: any): Game => ({
   volunteers: g.volunteers || [],
   isPrivate: g.is_private ?? false,
   gameInviteCode: g.game_invite_code || null,
+  occurrenceCounted: g.occurrence_counted ?? false,
+  strictAgeMatch: g.strict_age_match ?? false,
 });
 
 export const mapTeamGroup = (tg: any): TeamGroup => ({
@@ -128,6 +158,7 @@ export const mapClub = (c: any): Club => ({
   id: c.id,
   coachId: c.coach_id,
   name: c.name,
+  defaultLocation: c.default_location || null,
 });
 
 export const mapRoster = (r: any): RosterEntry => ({
@@ -137,6 +168,13 @@ export const mapRoster = (r: any): RosterEntry => ({
   status: r.status,
   guardianApproved: r.guardian_approved || false,
   withdrawReason: r.withdraw_reason || null,
+});
+
+export const mapCoachPlayerNote = (n: any): CoachPlayerNote => ({
+  id: n.id || `${n.coach_id}:${n.player_id}`,
+  coachId: n.coach_id,
+  playerId: n.player_id,
+  nickname: n.nickname || "",
 });
 
 export const mapMatchApp = (a: any): MatchApplication => ({
@@ -179,6 +217,102 @@ export const loadAllData = async () => {
     } as AdminSettings,
     clubs: (clubsData as any[]).map(mapClub),
   };
+};
+
+export const getGameOccurrenceConfirmations = async (
+  coachId: string,
+): Promise<Record<string, boolean>> => {
+  const data = await apiFetch(
+    `/game_occurrence_confirmations?coachId=${encodeURIComponent(coachId)}`,
+  );
+  const map: Record<string, boolean> = {};
+  (data as any[]).forEach((item) => {
+    if (item?.game_id) {
+      map[item.game_id] = Boolean(item.confirmed);
+    }
+  });
+  return map;
+};
+
+export const getGameOccurrenceConfirmationSnapshot = async (
+  coachId: string,
+): Promise<{
+  submittedByMe: Record<string, boolean>;
+  confirmedByMe: Record<string, boolean>;
+  peerSubmittedByGame: Record<string, boolean>;
+  gameCountedByGame: Record<string, boolean>;
+}> => {
+  const data = await apiFetch(
+    `/game_occurrence_confirmations?coachId=${encodeURIComponent(coachId)}`,
+  );
+  const submittedByMe: Record<string, boolean> = {};
+  const confirmedByMe: Record<string, boolean> = {};
+  const peerSubmittedByGame: Record<string, boolean> = {};
+  const gameCountedByGame: Record<string, boolean> = {};
+  (data as any[]).forEach((item) => {
+    if (!item?.game_id) return;
+    submittedByMe[item.game_id] = true;
+    confirmedByMe[item.game_id] = Boolean(item.confirmed);
+    peerSubmittedByGame[item.game_id] = Boolean(item.peer_submitted);
+    gameCountedByGame[item.game_id] = Boolean(item.game_counted);
+  });
+  return {
+    submittedByMe,
+    confirmedByMe,
+    peerSubmittedByGame,
+    gameCountedByGame,
+  };
+};
+
+export const setGameOccurrenceConfirmation = async (
+  gameId: string,
+  coachId: string,
+  confirmed: boolean,
+): Promise<{
+  confirmation: { gameId: string; coachId: string; confirmed: boolean };
+  gameCounted: boolean;
+  creatorGamesPlayedCount: number;
+  opposingCoachGamesPlayedCount: number | null;
+}> => {
+  const data = await apiFetch(`/games/${gameId}/occurrence_confirmation`, {
+    method: "POST",
+    body: { coachId, confirmed },
+  });
+  return {
+    confirmation: {
+      gameId: data.confirmation.game_id,
+      coachId: data.confirmation.coach_id,
+      confirmed: data.confirmation.confirmed,
+    },
+    gameCounted: Boolean(data.game_counted),
+    creatorGamesPlayedCount: Number(data.creator_games_played_count ?? 0) || 0,
+    opposingCoachGamesPlayedCount:
+      data.opposing_coach_games_played_count === null ||
+      data.opposing_coach_games_played_count === undefined
+        ? null
+        : Number(data.opposing_coach_games_played_count) || 0,
+  };
+};
+
+export const getCoachPlayerNotes = async (
+  coachId: string,
+): Promise<CoachPlayerNote[]> => {
+  const data = await apiFetch(
+    `/coach_player_notes?coachId=${encodeURIComponent(coachId)}`,
+  );
+  return (data as any[]).map(mapCoachPlayerNote);
+};
+
+export const saveCoachPlayerNote = async (
+  coachId: string,
+  playerId: string,
+  nickname: string,
+): Promise<CoachPlayerNote | null> => {
+  const data = await apiFetch("/coach_player_notes", {
+    method: "PUT",
+    body: { coachId, playerId, nickname },
+  });
+  return data?.nickname ? mapCoachPlayerNote(data) : null;
 };
 
 // ==========================================

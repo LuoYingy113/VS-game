@@ -2,9 +2,12 @@
 // 数据类型定义 (Data Types)
 // ==========================================
 
+export type AppRole = "coach" | "player" | "guardian" | "admin";
+
 export interface User {
   id: string;
-  role: "coach" | "player" | "guardian" | "admin";
+  role: AppRole;
+  availableRoles: AppRole[];
   name: string;
   email: string;
   phone: string | null;
@@ -12,9 +15,10 @@ export interface User {
   guardianId: string | null;
   bio: string | null;
   sport: string | null;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "pending";
   defaultLocation: string | null;
   defaultClubId: string | null;
+  gamesPlayedCount: number;
 }
 
 export interface Game {
@@ -35,12 +39,15 @@ export interface Game {
   volunteers: string[];
   isPrivate: boolean;
   gameInviteCode: string | null;
+  occurrenceCounted: boolean;
+  strictAgeMatch: boolean;
 }
 
 export interface Club {
   id: string;
   coachId: string;
   name: string;
+  defaultLocation: string | null;
 }
 
 export interface OfflinePlayer {
@@ -75,6 +82,13 @@ export interface RosterEntry {
     | "withdrawn";
   guardianApproved: boolean;
   withdrawReason: string | null;
+}
+
+export interface CoachPlayerNote {
+  id: string;
+  coachId: string;
+  playerId: string;
+  nickname: string;
 }
 
 export interface MatchApplication {

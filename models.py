@@ -11,7 +11,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, index=True)
-    role = Column(String, index=True)  # 'coach', 'player', 'guardian', 'admin'
+    role = Column(String, index=True)  # single role or comma-separated roles
     name = Column(String)
     email = Column(String, unique=True, index=True)
     phone = Column(String, nullable=True)
@@ -23,6 +23,7 @@ class User(Base):
     password = Column(String, nullable=True, default=os.getenv("DEFAULT_USER_PASSWORD", "change_me_please"))
     default_location = Column(String, nullable=True)
     default_club_id = Column(String, nullable=True)
+    games_played_count = Column(Integer, nullable=False, default=0)
     verification_token = Column(String, nullable=True)
 
 class Game(Base):
@@ -45,6 +46,8 @@ class Game(Base):
     home_group_id = Column(String, ForeignKey("team_groups.id"), nullable=True)
     is_private = Column(Boolean, default=False)
     game_invite_code = Column(String, nullable=True)
+    occurrence_counted = Column(Boolean, default=False)
+    strict_age_match = Column(Boolean, default=False)
 
 class TeamGroup(Base):
     __tablename__ = "team_groups"
@@ -79,6 +82,14 @@ class Roster(Base):
     guardian_approved = Column(Boolean, default=False)
     withdraw_reason = Column(String, nullable=True)
 
+class CoachPlayerNote(Base):
+    __tablename__ = "coach_player_notes"
+
+    id = Column(String, primary_key=True, index=True)
+    coach_id = Column(String, ForeignKey("users.id"), index=True)
+    player_id = Column(String, index=True)
+    nickname = Column(String)
+
 class Settings(Base):
     __tablename__ = "app_settings"
 
@@ -91,6 +102,11 @@ class InviteCode(Base):
     id = Column(String, primary_key=True, index=True)
     code = Column(String, unique=True, index=True)
     coach_id = Column(String, ForeignKey("users.id"))
+    group_id = Column(String, ForeignKey("team_groups.id"), nullable=True)
+    used = Column(Boolean, default=False)
+    used_by_player_id = Column(String, nullable=True)
+    created_at = Column(String, nullable=True)
+    expires_at = Column(String, nullable=True)
 
 class Club(Base):
     __tablename__ = "clubs"
@@ -98,10 +114,7 @@ class Club(Base):
     id = Column(String, primary_key=True, index=True)
     coach_id = Column(String, ForeignKey("users.id"))
     name = Column(String)
-    group_id = Column(String, ForeignKey("team_groups.id"), nullable=True)
-    used = Column(Boolean, default=False)
-    used_by_player_id = Column(String, nullable=True)
-    created_at = Column(String)
+    default_location = Column(String, nullable=True)
 
 class CoachInviteCode(Base):
     __tablename__ = "coach_invite_codes"
@@ -122,3 +135,24 @@ class Notification(Base):
     body = Column(String)
     read = Column(Boolean, default=False)
     ts = Column(String)  # ISO timestamp
+
+
+class CoachGameHistory(Base):
+    __tablename__ = "coach_game_history"
+
+    id = Column(String, primary_key=True, index=True)
+    coach_id = Column(String, ForeignKey("users.id"), index=True)
+    game_id = Column(String, ForeignKey("games.id"), index=True)
+    note = Column(String, nullable=True)
+    result = Column(String, nullable=True)  # 'win' | 'lose'
+    updated_at = Column(String, nullable=False)
+
+
+class GameOccurrenceConfirmation(Base):
+    __tablename__ = "game_occurrence_confirmations"
+
+    id = Column(String, primary_key=True, index=True)
+    game_id = Column(String, ForeignKey("games.id"), index=True)
+    coach_id = Column(String, ForeignKey("users.id"), index=True)
+    confirmed = Column(Boolean, default=False)
+    updated_at = Column(String, nullable=False)

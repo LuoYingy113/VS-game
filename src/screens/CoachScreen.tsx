@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  History,
   Key,
   Mail,
   MapPin,
@@ -22,6 +23,7 @@ import {
   UserPlus,
   Users,
   UserX,
+  X,
 } from "lucide-react-native";
 import React, { useState } from "react";
 import {
@@ -45,12 +47,23 @@ import {
   mapMatchApp,
   mapRoster,
   mapTeamGroup,
+  saveCoachPlayerNote,
 } from "../api";
+import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
 import { AppModal, C, DatePickerField, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
-import { sendAppNotification } from "../storage";
+import {
+  clearLoggedInUserId,
+  getCoachCancellationCount,
+  getCoachGameHistory,
+  incrementCoachCancellationCount,
+  notifI18n,
+  saveCoachGameHistory,
+  sendAppNotification,
+} from "../storage";
 import {
   Club,
+  CoachPlayerNote,
   Game,
   MatchApplication,
   ModalConfig,
@@ -62,7 +75,19 @@ import {
 interface CoachState {
   currentUser: UserType;
   setCurrentUser: React.Dispatch<React.SetStateAction<UserType | null>>;
+  setUsers?: React.Dispatch<React.SetStateAction<UserType[]>>;
   users: UserType[];
+  coachPlayerNotes: CoachPlayerNote[];
+  setCoachPlayerNotes: React.Dispatch<React.SetStateAction<CoachPlayerNote[]>>;
+  offlineParticipationByGame: Record<
+    string,
+    Record<string, "waiting" | "participating" | "out">
+  >;
+  setOfflineParticipationByGame: React.Dispatch<
+    React.SetStateAction<
+      Record<string, Record<string, "waiting" | "participating" | "out">>
+    >
+  >;
   games: Game[];
   setGames: React.Dispatch<React.SetStateAction<Game[]>>;
   matchApplications: MatchApplication[];
@@ -77,6 +102,27 @@ interface CoachState {
   coachProfileOpen: boolean;
   setCoachProfileOpen: (v: boolean) => void;
   hasUnreadMatchApplicationNotif?: boolean;
+}
+
+function getCoachPlayerNickname(
+  notes: CoachPlayerNote[],
+  coachId: string,
+  playerId: string,
+): string | null {
+  const note = notes.find(
+    (item) => item.coachId === coachId && item.playerId === playerId,
+  );
+  const nickname = note?.nickname?.trim();
+  return nickname ? nickname : null;
+}
+
+function getCoachPlayerDisplayName(
+  notes: CoachPlayerNote[],
+  coachId: string,
+  playerId: string,
+  fallbackName?: string | null,
+): string {
+  return getCoachPlayerNickname(notes, coachId, playerId) || fallbackName || "-";
 }
 
 interface CoachProfileScreenProps {
@@ -99,6 +145,7 @@ function CoachProfileScreen({
   const insets = useSafeAreaInsets();
   const { t } = useLanguage();
   const [phone, setPhone] = React.useState(currentUser.phone ?? "");
+  const [name, setName] = React.useState(currentUser.name ?? "");
   const [location, setLocation] = React.useState(
     currentUser.defaultLocation ?? "",
   );
@@ -126,13 +173,45 @@ function CoachProfileScreen({
   const [pwdError, setPwdError] = React.useState("");
   const [pwdSaving, setPwdSaving] = React.useState(false);
 
+  const handleDeleteAccount = () => {
+    Alert.alert(t("deleteAccountTitle"), t("deleteAccountCoachConfirm"), [
+      { text: t("calCancel"), style: "cancel" },
+      {
+        text: t("deleteAccountBtn"),
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await apiFetch(`/users/${currentUser.id}`, { method: "DELETE" });
+            onClose();
+            showToast(t("accountDeleted"));
+            await clearLoggedInUserId();
+            setCurrentUser(null);
+          } catch (err: any) {
+            showToast("Failed: " + err.message);
+          }
+        },
+      },
+    ]);
+  };
+
   const save = async () => {
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      showToast(t("nameRequired"));
+      return;
+    }
+    const normalizedPhone = phone.trim();
+    if (normalizedPhone && !isValidPhoneNumber(normalizedPhone)) {
+      showToast(t("invalidPhoneFormat"));
+      return;
+    }
     setSaving(true);
     try {
       const data = await apiFetch(`/users/${currentUser.id}/profile`, {
         method: "PUT",
         body: {
-          phone: phone.trim() || null,
+          name: normalizedName,
+          phone: normalizedPhone || null,
           defaultLocation: location.trim() || null,
           defaultClubId: clubId || null,
           sport: selectedSports.join(",") || null,
@@ -140,12 +219,13 @@ function CoachProfileScreen({
       });
       setCurrentUser((prev: any) => ({
         ...prev,
+        name: data.name || prev.name,
         phone: data.phone || null,
         defaultLocation: data.default_location || null,
         defaultClubId: data.default_club_id || null,
         sport: data.sport || null,
       }));
-      showToast(t("profileSaved"));
+      Alert.alert(t("save"), t("profileSaved"));
     } catch (err: any) {
       showToast(t("profileSaveFailed") + ": " + err.message);
     } finally {
@@ -265,18 +345,22 @@ function CoachProfileScreen({
           </Text>
           <View>
             <Text style={s.fieldLabel}>{t("labelFullName")}</Text>
-            <View
-              style={[
-                s.searchRow,
-                { marginBottom: 0, backgroundColor: C.slate100 },
-              ]}
-            >
+            <View style={[s.searchRow, { marginBottom: 0 }]}>
               <User size={15} color={C.slate400} />
-              <Text
-                style={[s.searchInput, { color: C.slate500, paddingTop: 0 }]}
-              >
-                {currentUser.name}
-              </Text>
+              <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <TextInput
+                style={[s.searchInput, { paddingTop: 0 }]}
+                value={name}
+                onChangeText={setName}
+                placeholder={t("labelFullName")}
+                placeholderTextColor={C.slate400}
+              />
+                <View style={s.countBadge}>
+                  <Text style={s.countBadgeText}>
+                    {t("gamesPlayedCountShort")}: {currentUser.gamesPlayedCount ?? 0}
+                  </Text>
+                </View>
+              </View>
             </View>
           </View>
           <View>
@@ -535,6 +619,21 @@ function CoachProfileScreen({
               </TouchableOpacity>
             </View>
           </View>
+          <View
+            style={{
+              marginTop: 12,
+              borderTopWidth: 1,
+              borderTopColor: C.slate200,
+              paddingTop: 16,
+            }}
+          >
+            <TouchableOpacity
+              style={[s.btn, { backgroundColor: C.red }]}
+              onPress={handleDeleteAccount}
+            >
+              <Text style={s.btnText}>{t("deleteAccountBtn")}</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
@@ -545,6 +644,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   const {
     currentUser,
     setCurrentUser,
+    setUsers,
     games,
     setGames,
     matchApplications,
@@ -552,6 +652,10 @@ export default function CoachScreen({ state }: { state: CoachState }) {
     teamGroups,
     setTeamGroups,
     users,
+    coachPlayerNotes,
+    setCoachPlayerNotes,
+    offlineParticipationByGame,
+    setOfflineParticipationByGame,
     rosters,
     setRosters,
     showToast,
@@ -565,9 +669,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
     "discover" | "my_games" | "confirmed" | "team"
   >("confirmed");
   const [modal, setModal] = useState<ModalConfig | null>(null);
-  const [filterSport, setFilterSport] = useState<string[]>(
-    currentUser.sport ? [currentUser.sport] : [],
-  );
+  const [filterSport, setFilterSport] = useState<string>("");
   const [filterAgeGroup, setFilterAgeGroup] = useState<string[]>([]);
   const [filterGender, setFilterGender] = useState<string[]>([]);
   const [teamFilterAgeGroup, setTeamFilterAgeGroup] = useState<string[]>([]);
@@ -579,22 +681,25 @@ export default function CoachScreen({ state }: { state: CoachState }) {
     Set<string>
   >(new Set());
   const [clubs, setClubs] = useState<Club[]>([]);
+  const [coachHistoryNotes, setCoachHistoryNotes] = useState<Record<string, string>>({});
+  const [coachHistoryResults, setCoachHistoryResults] = useState<
+    Record<string, "win" | "lose">
+  >({});
+  const [coachCancellationCount, setCoachCancellationCount] = useState(0);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
     new Set(),
   );
   const [expandedClubIds, setExpandedClubIds] = useState<Set<string>>(
     new Set(),
   );
-  const [expandedDiscoverIds, setExpandedDiscoverIds] = useState<Set<string>>(
-    new Set(),
+  const [expandedDiscoverId, setExpandedDiscoverId] = useState<string | null>(
+    null,
   );
 
   // Reset sport filter + auto-select age/gender from coach's teams every time discover tab opens
   React.useEffect(() => {
     if (tab === "discover") {
-      if (currentUser.sport) {
-        setFilterSport(parseSports(currentUser.sport));
-      }
+      setFilterSport("");
       const myTeams = teamGroups.filter((tg) => tg.coachId === currentUser.id);
       const myAgeGroups = myTeams.flatMap((tg) => parseAgeGroups(tg.ageGroup));
       const uniqueAges = Array.from(new Set(myAgeGroups));
@@ -612,11 +717,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   }, [tab]);
 
   const toggleDiscoverExpand = (id: string) =>
-    setExpandedDiscoverIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setExpandedDiscoverId((prev) => (prev === id ? null : id));
 
   const toggleGroupExpand = (id: string) =>
     setExpandedGroupIds((prev) => {
@@ -638,8 +739,85 @@ export default function CoachScreen({ state }: { state: CoachState }) {
       .catch(() => {});
   }, [currentUser.id]);
 
+  React.useEffect(() => {
+    getCoachGameHistory(currentUser.id)
+      .then(({ notes, results }) => {
+        setCoachHistoryNotes(notes);
+        setCoachHistoryResults(results);
+      })
+      .catch(() => {
+        setCoachHistoryNotes({});
+        setCoachHistoryResults({});
+      });
+  }, [currentUser.id]);
+
+  React.useEffect(() => {
+    getCoachCancellationCount(currentUser.id)
+      .then(setCoachCancellationCount)
+      .catch(() => setCoachCancellationCount(0));
+  }, [currentUser.id]);
+
   // Clubs belonging to the current coach only (for UI pickers / team tab)
   const myClubs = clubs.filter((c) => c.coachId === currentUser.id);
+
+  const openEditPlayerNicknameModal = (
+    playerId: string,
+    fallbackName: string,
+  ) => {
+    const existingNickname =
+      getCoachPlayerNickname(coachPlayerNotes, currentUser.id, playerId) || "";
+    const ModalContent = () => {
+      const [nickname, setNickname] = useState(existingNickname);
+      const [saving, setSaving] = useState(false);
+      const save = async () => {
+        setSaving(true);
+        try {
+          const saved = await saveCoachPlayerNote(
+            currentUser.id,
+            playerId,
+            nickname,
+          );
+          setCoachPlayerNotes((prev) => {
+            const next = prev.filter(
+              (item) =>
+                !(item.coachId === currentUser.id && item.playerId === playerId),
+            );
+            return saved ? [...next, saved] : next;
+          });
+          setModal(null);
+          showToast(saved ? t("coachNoteSaved") : t("coachNoteDeleted"));
+        } catch (err: any) {
+          showToast("Failed: " + err.message);
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      return (
+        <View style={{ gap: 12 }}>
+          <Text style={s.hintText}>{fallbackName}</Text>
+          <FieldInput
+            label={t("coachNoteLabel")}
+            value={nickname}
+            onChangeText={setNickname}
+            placeholder={t("coachNotePlaceholder")}
+          />
+          <TouchableOpacity
+            style={[s.btn, saving && s.btnDisabled]}
+            onPress={save}
+            disabled={saving}
+          >
+            <Text style={s.btnText}>{saving ? t("coachNoteSaving") : t("save")}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    };
+
+    setModal({
+      title: t("coachNoteModalTitle"),
+      content: <ModalContent />,
+    });
+  };
 
   // ---- Profile modal is opened/closed via coachProfileOpen prop directly ----
 
@@ -667,7 +845,85 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   const gamesIJoined = acceptedGameIds
     .map((id) => games.find((g) => g.id === id))
     .filter(Boolean) as Game[];
-  const allMyGames = [...myCreatedGames, ...gamesIJoined];
+  const allMyGames = [...myCreatedGames, ...gamesIJoined].filter((g) => g.status !== "cancelled");
+  const hasPendingForGame = (gameId: string) =>
+    matchApplications.some((m) => m.gameId === gameId && m.status === "pending");
+  const sortedMyOpenGames = allMyGames
+    .filter((game) => game.status !== "locked" && new Date(game.time).getTime() > Date.now())
+    .slice()
+    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+
+  const isPastMatchDay = (iso: string) => {
+    const gameDate = new Date(iso);
+    const gameTime = gameDate.getTime();
+    if (!Number.isFinite(gameTime)) return false;
+    const endOfDay = new Date(gameDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    return Date.now() > endOfDay.getTime();
+  };
+
+  const pendingOccurrenceGames: Game[] = [];
+
+  const [expandedManagedGameId, setExpandedManagedGameId] =
+    useState<string | null>(null);
+  const [collapsedManagedGameIds, setCollapsedManagedGameIds] = useState<Set<string>>(new Set());
+  const defaultExpandedManagedGameId = React.useMemo(() => {
+    const candidate = allMyGames.find((managedGame) => {
+      const hasPendingOpponents =
+        managedGame.creatorId === currentUser.id &&
+        matchApplications.some(
+          (m) => m.gameId === managedGame.id && m.status === "pending",
+        );
+      const hasParticipants = rosters.some(
+        (r) =>
+          r.gameId === managedGame.id &&
+          (r.status === "approved" ||
+            r.status === "pending_coach" ||
+            r.status === "pending_guardian"),
+      );
+      return hasPendingOpponents || hasParticipants;
+    });
+    return candidate?.id ?? null;
+  }, [allMyGames, currentUser.id, matchApplications, rosters]);
+  const isManagedGameExpanded = (game: Game) => {
+    if (collapsedManagedGameIds.has(game.id)) return false;
+    if (expandedManagedGameId === game.id) return true;
+    return defaultExpandedManagedGameId === game.id;
+  };
+  const setManagedGameExpanded = (gameId: string, expanded: boolean) => {
+    if (expanded) {
+      setExpandedManagedGameId(gameId);
+      setCollapsedManagedGameIds((prev) => {
+        const next = new Set(prev);
+        next.delete(gameId);
+        return next;
+      });
+    } else {
+      setExpandedManagedGameId(null);
+      setCollapsedManagedGameIds((prev) => {
+        const next = new Set(prev);
+        next.add(gameId);
+        return next;
+      });
+    }
+  };
+
+  const findNearbyMatchesForGroup = (
+    groupId: string,
+    targetIso: string,
+    excludeGameId?: string,
+  ): Game[] => {
+    const targetMs = new Date(targetIso).getTime();
+    if (!Number.isFinite(targetMs)) return [];
+    return games.filter((g) => {
+      if (excludeGameId && g.id === excludeGameId) return false;
+      if (g.status === "cancelled") return false;
+      const sameGroup = g.homeGroupId === groupId || g.opposingGroupId === groupId;
+      if (!sameGroup) return false;
+      const diffMs = Math.abs(new Date(g.time).getTime() - targetMs);
+      return diffMs < 2 * 60 * 60 * 1000;
+    });
+  };
 
   // ---- Modals ----
   const openCoachProfileModal = (coach?: UserType) => {
@@ -801,6 +1057,226 @@ export default function CoachScreen({ state }: { state: CoachState }) {
     });
   };
 
+  const openCoachHistoryModal = () => {
+    const ModalContent = () => {
+      const { t } = useLanguage();
+      const [draftNotes, setDraftNotes] = useState<Record<string, string>>(coachHistoryNotes);
+      const [draftResults, setDraftResults] = useState<
+        Record<string, "win" | "lose">
+      >(coachHistoryResults);
+      const [savingGameId, setSavingGameId] = useState<string | null>(null);
+      const [expandedHistoryIds, setExpandedHistoryIds] = useState<Set<string>>(
+        new Set(),
+      );
+      const [relatedGames, setRelatedGames] = useState<Game[]>([]);
+      const [historyLoading, setHistoryLoading] = useState(true);
+
+      React.useEffect(() => {
+        apiFetch(`/games/history?coachId=${currentUser.id}`)
+          .then((data: any[]) => setRelatedGames(data.map(mapGame)))
+          .catch(() => {})
+          .finally(() => setHistoryLoading(false));
+      }, []);
+
+      const saveHistoryNote = async (gameId: string) => {
+        const note = (draftNotes[gameId] || "").trim();
+        const nextNotes = { ...draftNotes };
+        if (note) nextNotes[gameId] = note;
+        else delete nextNotes[gameId];
+
+        const nextResults = { ...draftResults };
+        if (!nextResults[gameId]) {
+          delete nextResults[gameId];
+        }
+
+        setSavingGameId(gameId);
+        await saveCoachGameHistory(currentUser.id, nextNotes, nextResults);
+        setCoachHistoryNotes(nextNotes);
+        setCoachHistoryResults(nextResults);
+        setDraftNotes(nextNotes);
+        setDraftResults(nextResults);
+        setSavingGameId(null);
+        showToast(t("coachHistoryNoteSaved"));
+      };
+
+      const toggleHistoryExpand = (gameId: string) => {
+        setExpandedHistoryIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(gameId)) next.delete(gameId);
+          else next.add(gameId);
+          return next;
+        });
+      };
+
+      if (historyLoading) {
+        return <Text style={s.hintText}>{t("loading")}</Text>;
+      }
+      if (relatedGames.length === 0) {
+        return <Text style={s.hintText}>{t("coachHistoryEmpty")}</Text>;
+      }
+
+      return (
+        <View style={{ gap: 12 }}>
+          {relatedGames.map((historyGame) => {
+            const isHomeForCurrentCoach = historyGame.creatorId === currentUser.id;
+            const opponentGroupId = isHomeForCurrentCoach
+              ? historyGame.opposingGroupId
+              : historyGame.homeGroupId;
+            const opponentGroup = opponentGroupId
+              ? teamGroups.find((tg) => tg.id === opponentGroupId)
+              : null;
+            const opponentCoachId = isHomeForCurrentCoach
+              ? historyGame.opposingTeamId
+              : historyGame.creatorId;
+            const opponentCoach = opponentCoachId
+              ? users.find((u) => u.id === opponentCoachId)
+              : null;
+            const opponentClub = opponentGroup?.clubId
+              ? clubs.find((club) => club.id === opponentGroup.clubId)
+              : opponentCoach?.defaultClubId
+                ? clubs.find((club) => club.id === opponentCoach.defaultClubId)
+                : null;
+            const noteValue = draftNotes[historyGame.id] ?? "";
+            const resultValue = draftResults[historyGame.id];
+            const expanded = expandedHistoryIds.has(historyGame.id);
+            const historyCardBg =
+              resultValue === "win"
+                ? "#f0fdf4"
+                : resultValue === "lose"
+                  ? "#fef2f2"
+                  : C.slate50;
+            const historyCardBorder =
+              resultValue === "win"
+                ? "#86efac"
+                : resultValue === "lose"
+                  ? "#fca5a5"
+                  : C.slate200;
+            const teamsSummary = `vs ${opponentClub?.name ?? "—"}`;
+            return (
+              <View
+                key={historyGame.id}
+                style={[
+                  s.historyCard,
+                  { backgroundColor: historyCardBg, borderColor: historyCardBorder },
+                ]}
+              >
+                <TouchableOpacity
+                  style={s.rowBetween}
+                  onPress={() => toggleHistoryExpand(historyGame.id)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.historyTitle}>
+                    {sportEmoji(historyGame.sport)}
+                  </Text>
+                  <Text style={{ color: C.slate500, fontSize: 12 }}>
+                    {expanded ? "▲" : "▼"}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={s.hintText}>{fmtDateTime(historyGame.time)}</Text>
+                <Text style={s.hintText}>{teamsSummary}</Text>
+
+                {expanded && (
+                  <>
+                    <Text style={s.hintText}>{historyGame.location}</Text>
+                    <Text style={s.hintText}>
+                      {t("statusInfoLabel")}: {historyGame.status.toUpperCase()}
+                    </Text>
+                    <Text style={s.label}>{t("coachHistoryResultLabel")}</Text>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <TouchableOpacity
+                        style={[
+                          s.filterChip,
+                          resultValue === "win" && {
+                            backgroundColor: "#16a34a",
+                            borderColor: "#16a34a",
+                          },
+                        ]}
+                        onPress={() =>
+                          setDraftResults((prev) => {
+                            const next = { ...prev };
+                            if (next[historyGame.id] === "win") {
+                              delete next[historyGame.id];
+                            } else {
+                              next[historyGame.id] = "win";
+                            }
+                            return next;
+                          })
+                        }
+                      >
+                        <Text
+                          style={[
+                            s.filterChipText,
+                            resultValue === "win" && { color: C.white },
+                          ]}
+                        >
+                          {t("coachHistoryResultWin")}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          s.filterChip,
+                          resultValue === "lose" && {
+                            backgroundColor: "#dc2626",
+                            borderColor: "#dc2626",
+                          },
+                        ]}
+                        onPress={() =>
+                          setDraftResults((prev) => {
+                            const next = { ...prev };
+                            if (next[historyGame.id] === "lose") {
+                              delete next[historyGame.id];
+                            } else {
+                              next[historyGame.id] = "lose";
+                            }
+                            return next;
+                          })
+                        }
+                      >
+                        <Text
+                          style={[
+                            s.filterChipText,
+                            resultValue === "lose" && { color: C.white },
+                          ]}
+                        >
+                          {t("coachHistoryResultLose")}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    <FieldInput
+                      label={t("coachHistoryNoteLabel")}
+                      value={noteValue}
+                      onChangeText={(value) =>
+                        setDraftNotes((prev) => ({ ...prev, [historyGame.id]: value }))
+                      }
+                      placeholder={t("coachHistoryNotePlaceholder")}
+                      multiline
+                    />
+                    <TouchableOpacity
+                      style={[s.btn, savingGameId === historyGame.id && s.btnDisabled]}
+                      onPress={() => void saveHistoryNote(historyGame.id)}
+                      disabled={savingGameId === historyGame.id}
+                    >
+                      <Text style={s.btnText}>
+                        {savingGameId === historyGame.id
+                          ? t("coachHistoryNoteSaving")
+                          : t("coachHistoryNoteSave")}
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      );
+    };
+
+    setModal({
+      title: t("coachHistoryTitle"),
+      content: <ModalContent />,
+    });
+  };
+
   const openCreateGameModal = () => {
     const ModalContent = () => {
       const { t } = useLanguage();
@@ -820,15 +1296,20 @@ export default function CoachScreen({ state }: { state: CoachState }) {
       const [homeGroupId, setHomeGroupId] = useState(initialGroup?.id ?? "");
       const [homeGroupOpen, setHomeGroupOpen] = useState(false);
       const coachSports = parseSports(currentUser.sport);
-      const sportOptions = coachSports.length > 0 ? coachSports : ALL_SPORTS;
-      const defaultSport = sportOptions[0] ?? "";
-      const [sport, setSport] = useState(
-        normalizeSportName(initialGroup?.sport) || defaultSport,
-      );
+      const initialGroupSport = normalizeSportName(initialGroup?.sport);
+      const initialSportOptions = initialGroupSport
+        ? [initialGroupSport]
+        : coachSports.length > 0
+          ? coachSports
+          : ALL_SPORTS;
+      const [sport, setSport] = useState(initialSportOptions[0] ?? "");
       const [sportOpen, setSportOpen] = useState(false);
       const [time, setTime] = useState("");
+      const initialGroupClub = initialGroup?.clubId
+        ? clubs.find((c) => c.id === initialGroup.clubId)
+        : null;
       const [location, setLocation] = useState(
-        currentUser.defaultLocation ?? "",
+        initialGroupClub?.defaultLocation ?? currentUser.defaultLocation ?? "",
       );
       const [ageGroup, setAgeGroup] = useState(
         parseAgeGroups(initialGroup?.ageGroup)[0] ?? "",
@@ -839,15 +1320,54 @@ export default function CoachScreen({ state }: { state: CoachState }) {
       );
       const [description, setDescription] = useState("");
       const [contactPhone, setContactPhone] = useState(currentUser.phone ?? "");
+      const [contactPhoneInvalid, setContactPhoneInvalid] = useState(false);
       const [isPrivate, setIsPrivate] = useState(false);
+      const [strictAgeMatch, setStrictAgeMatch] = useState(false);
       const [visibilityOpen, setVisibilityOpen] = useState(false);
       const [submitted, setSubmitted] = useState(false);
 
+      const handleTimeChange = (nextTime: string) => {
+        if (!nextTime) {
+          setTime("");
+          return;
+        }
+        const parsed = new Date(nextTime).getTime();
+        if (!Number.isFinite(parsed)) {
+          setTime("");
+          showToast(t("invalidMatchTime"));
+          return;
+        }
+        if (parsed <= Date.now()) {
+          setTime("");
+          showToast(t("invalidMatchTime"));
+          return;
+        }
+        setTime(nextTime);
+      };
+
       const selectedHomeGroup = myGroups.find((g) => g.id === homeGroupId);
-      const ageGroupLocked =
-        parseAgeGroups(selectedHomeGroup?.ageGroup).length === 1;
+      const sportOptions = selectedHomeGroup?.sport
+        ? [normalizeSportName(selectedHomeGroup.sport)]
+        : coachSports.length > 0
+          ? coachSports
+          : ALL_SPORTS;
       const genderLocked = !!selectedHomeGroup?.gender;
       const sportLocked = !!selectedHomeGroup?.sport;
+      // Compute allowed age groups: team's age ±1 (so coach can play against slightly different ages)
+      const ageGroupOptions = (() => {
+        const teamAges = parseAgeGroups(selectedHomeGroup?.ageGroup);
+        if (teamAges.length === 0) return AGE_GROUP_OPTIONS;
+        if (teamAges.length > 1) return teamAges;
+        const single = teamAges[0];
+        const m = single.match(/^[Uu](\d+)$/);
+        if (!m) return AGE_GROUP_OPTIONS;
+        const n = parseInt(m[1], 10);
+        const opts: string[] = [];
+        if (n > 10) opts.push(`U${n - 1}`);
+        opts.push(single);
+        if (n < 21) opts.push(`U${n + 1}`);
+        return opts;
+      })();
 
       const formatGroupMeta = (g: (typeof myGroups)[0]) => {
         const genderText = g.gender
@@ -855,7 +1375,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               `gender${g.gender.charAt(0).toUpperCase() + g.gender.slice(1)}` as any,
             )
           : "—";
-        return `${formatAgeGroupLabel(g.ageGroup) || "—"} · ${genderText}`;
+        return `${formatAgeGroupLabel(g.ageGroup) || "—"} - ${genderText}`;
       };
 
       const selectHomeGroup = (id: string) => {
@@ -866,8 +1386,10 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           const ages = parseAgeGroups(grp.ageGroup);
           setAgeGroup(ages[0] ?? "");
           if (grp.gender) setGender(grp.gender);
-          if (grp.sport) setSport(normalizeSportName(grp.sport));
-          else setSport(defaultSport);
+          const nextSport = normalizeSportName(grp.sport) || sportOptions[0] || ALL_SPORTS[0];
+          setSport(nextSport);
+          const grpClub = grp.clubId ? clubs.find((c) => c.id === grp.clubId) : null;
+          setLocation(grpClub?.defaultLocation ?? currentUser.defaultLocation ?? "");
         }
       };
 
@@ -877,53 +1399,83 @@ export default function CoachScreen({ state }: { state: CoachState }) {
         const ages = parseAgeGroups(grp.ageGroup);
         setAgeGroup(ages[0] ?? "");
         if (grp.gender) setGender(grp.gender);
-        if (grp.sport) setSport(normalizeSportName(grp.sport));
-        else setSport(defaultSport);
+        setSport(normalizeSportName(grp.sport) || sportOptions[0] || ALL_SPORTS[0]);
+        const grpClub = grp.clubId ? clubs.find((c) => c.id === grp.clubId) : null;
+        setLocation(grpClub?.defaultLocation ?? currentUser.defaultLocation ?? "");
       }, [homeGroupId]);
-
-      React.useEffect(() => {
-        if (ageGroupLocked) setAgeGroupOpen(false);
-      }, [ageGroupLocked]);
 
       React.useEffect(() => {
         if (sportLocked) setSportOpen(false);
       }, [sportLocked]);
 
       const create = async () => {
+        const normalizedContactPhone = contactPhone.trim();
         if (
           !sport ||
           !time ||
           !location ||
-          !ageGroup ||
-          !homeGroupId ||
-          !contactPhone
+          !ageGroup
         ) {
           setSubmitted(true);
-          showToast(t("fillRequiredFields"));
           return;
         }
-        try {
-          const data = await apiFetch("/games", {
-            method: "POST",
-            body: {
-              creatorId: currentUser.id,
-              sport,
-              time,
-              location,
-              ageGroup,
-              gender: gender || null,
-              description,
-              contactPhone: contactPhone || null,
-              homeGroupId: homeGroupId || null,
-              isPrivate,
-            },
-          });
-          setGames((prev) => [...prev, mapGame(data)]);
-          setModal(null);
-          showToast(t("createMatchSuccess"));
-        } catch (err: any) {
-          showToast("Failed: " + err.message);
+        if (!isValidPhoneNumber(normalizedContactPhone)) {
+          setContactPhoneInvalid(true);
+          showToast(t("invalidPhoneFormat"));
+          return;
         }
+        setContactPhoneInvalid(false);
+        const doCreate = async () => {
+          try {
+            const data = await apiFetch("/games", {
+              method: "POST",
+              body: {
+                creatorId: currentUser.id,
+                sport,
+                time,
+                location,
+                ageGroup,
+                gender: gender || null,
+                description,
+                contactPhone: normalizedContactPhone,
+                homeGroupId: homeGroupId || null,
+                isPrivate,
+                strictAgeMatch,
+              },
+            });
+            setGames((prev) => [...prev, mapGame(data)]);
+            setModal(null);
+            showToast(t("createMatchSuccess"));
+          } catch (err: any) {
+            const rawReason = String(err?.message || "").trim();
+            let reason = rawReason || "Unknown error";
+            if (rawReason.includes("timed out")) {
+              reason = "Request timed out. Please check your network and try again.";
+            } else if (rawReason === "Network request failed") {
+              reason = "Network unavailable. Please check your connection.";
+            } else if (rawReason.startsWith("HTTP ")) {
+              reason = `Server error: ${rawReason}`;
+            }
+            showToast(`发布比赛失败：${reason}`);
+          }
+        };
+
+        const conflicts = findNearbyMatchesForGroup(homeGroupId, time);
+        if (conflicts.length > 0) {
+          Alert.alert(
+            t("scheduleConflictTitle"),
+            t("scheduleConflictCreateWarning").replace(
+              "{count}",
+              String(conflicts.length),
+            ),
+            [
+              { text: t("calCancel"), style: "cancel" },
+              { text: t("continueAnyway"), onPress: () => void doCreate() },
+            ],
+          );
+          return;
+        }
+        await doCreate();
       };
       return (
         <View style={{ gap: 12 }}>
@@ -1007,6 +1559,9 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           {/* Home team picker — first */}
           <View>
             <Text style={s.fieldLabel}>{t("selectHomeTeamLabel")} *</Text>
+            <Text style={[s.hintText, { marginBottom: 6 }]}> 
+              {t("createMatchTeamAutoFillHint")}
+            </Text>
             {filteredGroups.length === 0 ? (
               <Text style={[s.hintText, submitted && s.inputError]}>
                 {t("noGroupsCreateFirst")}
@@ -1134,7 +1689,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           <DatePickerField
             label={t("matchTimeLabel")}
             value={time}
-            onChange={setTime}
+            onChange={handleTimeChange}
             mode="datetime"
             inputStyle={submitted && !time ? s.fieldError : undefined}
           />
@@ -1152,10 +1707,8 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               style={[
                 s.dropdownTrigger,
                 submitted && !ageGroup && s.inputError,
-                ageGroupLocked && { opacity: 0.7 },
               ]}
-              onPress={() => !ageGroupLocked && setAgeGroupOpen((v) => !v)}
-              disabled={ageGroupLocked}
+              onPress={() => setAgeGroupOpen((v) => !v)}
             >
               <Text
                 style={ageGroup ? s.dropdownValueText : s.dropdownPlaceholder}
@@ -1163,26 +1716,12 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                 {ageGroup || "U10 – U21"}
               </Text>
               <Text style={{ color: C.slate400 }}>
-                {ageGroupLocked ? "🔒" : ageGroupOpen ? "▲" : "▼"}
+                {ageGroupOpen ? "▲" : "▼"}
               </Text>
             </TouchableOpacity>
             {ageGroupOpen && (
               <View style={s.dropdownList}>
-                {[
-                  "U10",
-                  "U11",
-                  "U12",
-                  "U13",
-                  "U14",
-                  "U15",
-                  "U16",
-                  "U17",
-                  "U18",
-                  "U19",
-                  "U20",
-                  "U21",
-                  "Others",
-                ].map((opt) => (
+                {ageGroupOptions.map((opt) => (
                   <TouchableOpacity
                     key={opt}
                     style={[
@@ -1246,18 +1785,29 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           <FieldInput
             label={t("contactPhoneOptLabel")}
             value={contactPhone}
-            onChangeText={setContactPhone}
+            onChangeText={(value) => {
+              setContactPhone(value);
+              if (contactPhoneInvalid) setContactPhoneInvalid(false);
+            }}
             placeholder="e.g. +1 555-0100"
+            error={contactPhoneInvalid}
           />
+          {contactPhoneInvalid && (
+            <Text style={[s.hintText, { color: C.red }]}>
+              {t("invalidPhoneFormat")}
+            </Text>
+          )}
           {/* Visibility picker */}
           <View>
-            <Text style={s.fieldLabel}>可见范围</Text>
+            <Text style={s.fieldLabel}>{t("matchVisibilityLabel")}</Text>
             <TouchableOpacity
               style={s.dropdownTrigger}
               onPress={() => setVisibilityOpen((v) => !v)}
             >
               <Text style={s.dropdownValueText}>
-                {isPrivate ? "🔒 仅邀请码可见" : "🌐 公开"}
+                {isPrivate
+                  ? `🔒 ${t("matchVisibilityPrivate")}`
+                  : `🌐 ${t("matchVisibilityPublic")}`}
               </Text>
               <Text style={{ color: C.slate400 }}>
                 {visibilityOpen ? "▲" : "▼"}
@@ -1278,7 +1828,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                       !isPrivate && s.dropdownItemTextActive,
                     ]}
                   >
-                    🌐 公开——所有教练可在发现页看到
+                    {`🌐 ${t("matchVisibilityPublicDesc")}`}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -1294,16 +1844,47 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                       isPrivate && s.dropdownItemTextActive,
                     ]}
                   >
-                    🔒 仅邀请码可见——创建后生成邀请码
+                    {`🔒 ${t("matchVisibilityPrivateDesc")}`}
                   </Text>
                 </TouchableOpacity>
               </View>
             )}
           </View>
+
           <TouchableOpacity
-            style={[s.btn, (!homeGroupId || !contactPhone) && s.btnDisabled]}
+            style={[
+              s.groupSelectRow,
+              strictAgeMatch
+                ? { borderColor: "#22c55e", backgroundColor: "#f0fdf4" }
+                : { borderColor: "#fca5a5", backgroundColor: "#fef2f2" },
+            ]}
+            onPress={() => setStrictAgeMatch((v) => !v)}
+            activeOpacity={0.85}
+          >
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: "600",
+                  color: strictAgeMatch ? "#15803d" : C.red,
+                }}
+              >
+                {t("strictAgeMatchLabel")}
+              </Text>
+              <Text style={{ fontSize: 11, color: C.slate500, marginTop: 2 }}>
+                {t("strictAgeMatchHint")}
+              </Text>
+            </View>
+            {strictAgeMatch ? <Check size={14} color={C.green} /> : <X size={14} color={C.red} />}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              s.btn,
+              (!homeGroupId || !contactPhone.trim()) && s.btnDisabled,
+            ]}
             onPress={create}
-            disabled={!homeGroupId || !contactPhone}
+            disabled={!homeGroupId || !contactPhone.trim()}
           >
             <Text style={s.btnText}>{t("publishMatchBtn")}</Text>
           </TouchableOpacity>
@@ -1319,18 +1900,49 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   const openManageClubsModal = () => {
     const ModalContent = () => {
       const [clubName, setClubName] = React.useState("");
+      const [clubDefaultLocation, setClubDefaultLocation] = React.useState("");
       const [localClubs, setLocalClubs] = React.useState<Club[]>(myClubs);
+      const [locationDrafts, setLocationDrafts] = React.useState<Record<string, string>>(
+        () =>
+          Object.fromEntries(
+            myClubs.map((club) => [club.id, club.defaultLocation ?? ""]),
+          ),
+      );
       const createClub = async () => {
         if (!clubName.trim()) return;
         try {
           const data = await apiFetch("/clubs", {
             method: "POST",
-            body: { coachId: currentUser.id, name: clubName.trim() },
+            body: {
+              coachId: currentUser.id,
+              name: clubName.trim(),
+              defaultLocation: clubDefaultLocation.trim() || null,
+            },
           });
           const newClub = mapClub(data);
           setLocalClubs((prev) => [...prev, newClub]);
           setClubs((prev) => [...prev, newClub]);
           setClubName("");
+          setClubDefaultLocation("");
+          setLocationDrafts((prev) => ({
+            ...prev,
+            [newClub.id]: newClub.defaultLocation ?? "",
+          }));
+        } catch (err: any) {
+          showToast("Failed: " + err.message);
+        }
+      };
+      const saveClubLocation = async (clubId: string) => {
+        const nextLocation = (locationDrafts[clubId] || "").trim();
+        try {
+          const data = await apiFetch(`/clubs/${clubId}`, {
+            method: "PUT",
+            body: { defaultLocation: nextLocation || null },
+          });
+          const updated = mapClub(data);
+          setLocalClubs((prev) => prev.map((c) => (c.id === clubId ? updated : c)));
+          setClubs((prev) => prev.map((c) => (c.id === clubId ? updated : c)));
+          showToast(t("profileSaved"));
         } catch (err: any) {
           showToast("Failed: " + err.message);
         }
@@ -1340,6 +1952,11 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           await apiFetch(`/clubs/${clubId}`, { method: "DELETE" });
           setLocalClubs((prev) => prev.filter((c) => c.id !== clubId));
           setClubs((prev) => prev.filter((c) => c.id !== clubId));
+          setLocationDrafts((prev) => {
+            const next = { ...prev };
+            delete next[clubId];
+            return next;
+          });
           // Unlink any team groups that belonged to this club
           setTeamGroups((prev) =>
             prev.map((tg) =>
@@ -1379,15 +1996,36 @@ export default function CoachScreen({ state }: { state: CoachState }) {
             localClubs.map((club) => (
               <View
                 key={club.id}
-                style={[s.rowBetween, s.infoBox, { paddingVertical: 10 }]}
+                style={[s.infoBox, { paddingVertical: 10, gap: 8 }]}
               >
-                <Text
-                  style={{ fontWeight: "600", color: C.slate800, fontSize: 14 }}
+                <View style={s.rowBetween}>
+                  <Text
+                    style={{ fontWeight: "600", color: C.slate800, fontSize: 14 }}
+                  >
+                    🏆 {club.name}
+                  </Text>
+                  <TouchableOpacity onPress={() => confirmDeleteClub(club)}>
+                    <Trash2 size={16} color={C.red} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={s.fieldLabel}>{t("clubDefaultLocationLabel")}</Text>
+                <View style={s.searchRow}>
+                  <MapPin size={15} color={C.slate400} />
+                  <TextInput
+                    style={s.searchInput}
+                    placeholder={t("clubDefaultLocationPlaceholder")}
+                    placeholderTextColor={C.slate400}
+                    value={locationDrafts[club.id] ?? ""}
+                    onChangeText={(value) =>
+                      setLocationDrafts((prev) => ({ ...prev, [club.id]: value }))
+                    }
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[s.btn, { paddingVertical: 10, shadowOpacity: 0 } ]}
+                  onPress={() => void saveClubLocation(club.id)}
                 >
-                  🏆 {club.name}
-                </Text>
-                <TouchableOpacity onPress={() => confirmDeleteClub(club)}>
-                  <Trash2 size={16} color={C.red} />
+                  <Text style={s.btnText}>{t("saveClubLocationBtn")}</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -1399,6 +2037,13 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               placeholderTextColor={C.slate400}
               value={clubName}
               onChangeText={setClubName}
+            />
+            <TextInput
+              style={[s.input, { flex: 1 }]}
+              placeholder={t("clubDefaultLocationPlaceholder")}
+              placeholderTextColor={C.slate400}
+              value={clubDefaultLocation}
+              onChangeText={setClubDefaultLocation}
             />
             <TouchableOpacity
               style={[
@@ -2090,59 +2735,161 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   };
 
   const openInviteCodeModal = (group: TeamGroup) => {
+    type GroupInviteCodeEntry = {
+      id: string;
+      code: string;
+      created_at: string;
+      expires_at?: string | null;
+    };
+
     const ModalContent = () => {
       const { t } = useLanguage();
-      const [code, setCode] = useState<string | null>(group.inviteCode);
-      const [loading, setLoading] = useState(!group.inviteCode);
-      const [copied, setCopied] = useState(false);
-      React.useEffect(() => {
-        if (!group.inviteCode) {
-          apiFetch(`/team_groups/${group.id}/invite_code`)
-            .then((data) => {
-              setCode(data.code);
-              setLoading(false);
-            })
-            .catch((err) => {
-              showToast("Error: " + err.message);
-              setLoading(false);
-            });
-        }
-      }, []);
-      const copy = async () => {
+      const [codes, setCodes] = useState<GroupInviteCodeEntry[]>([]);
+      const [loading, setLoading] = useState(true);
+      const [generating, setGenerating] = useState(false);
+      const [copiedCode, setCopiedCode] = useState<string | null>(null);
+      const [historyOpen, setHistoryOpen] = useState(false);
+
+      const syncLatestCode = (items: GroupInviteCodeEntry[]) => {
+        setTeamGroups((prev) =>
+          prev.map((g) =>
+            g.id === group.id ? { ...g, inviteCode: items[0]?.code ?? null } : g,
+          ),
+        );
+      };
+
+      const generate = async () => {
+        setGenerating(true);
         try {
-          await Clipboard.setStringAsync(code!);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
+          const created = await apiFetch(`/team_groups/${group.id}/invite_codes`, {
+            method: "POST",
+            body: { coachId: currentUser.id, groupId: group.id },
+          });
+          setCodes((prev) => {
+            const next = [created, ...prev];
+            syncLatestCode(next);
+            return next;
+          });
+        } catch (err: any) {
+          showToast("Error: " + err.message);
+        } finally {
+          setGenerating(false);
+        }
+      };
+
+      React.useEffect(() => {
+        let active = true;
+        const loadCodes = async () => {
+          try {
+            const data = await apiFetch(`/team_groups/${group.id}/invite_codes`);
+            if (!active) return;
+            const items = Array.isArray(data) ? data : [];
+            setCodes(items);
+            syncLatestCode(items);
+            if (items.length === 0) {
+              await generate();
+            }
+          } catch (err: any) {
+            showToast("Error: " + err.message);
+          } finally {
+            if (active) setLoading(false);
+          }
+        };
+        void loadCodes();
+        return () => {
+          active = false;
+        };
+      }, []);
+
+      const copy = async (value: string) => {
+        try {
+          await Clipboard.setStringAsync(value);
+          setCopiedCode(value);
+          setTimeout(() => setCopiedCode(null), 2000);
         } catch {
           showToast(t("copyFail"));
         }
       };
+
       if (loading) return <Text style={s.hintText}>{t("loading")}</Text>;
+
+      const currentCode = codes[0] ?? null;
+      const historyCodes = codes.slice(1);
+
       return (
         <View style={{ gap: 12 }}>
-          <Text style={s.hintText}>{t("inviteCodeHint")}</Text>
+          {historyCodes.length > 0 && (
+            <View>
+              <TouchableOpacity
+                style={s.dropdownTrigger}
+                onPress={() => setHistoryOpen((v) => !v)}
+              >
+                <Text style={s.dropdownValueText}>
+                  Active older codes ({historyCodes.length})
+                </Text>
+                <Text style={{ color: C.slate400 }}>
+                  {historyOpen ? "▲" : "▼"}
+                </Text>
+              </TouchableOpacity>
+              {historyOpen && (
+                <View style={s.dropdownList}>
+                  {historyCodes.map((entry) => (
+                    <View key={entry.id} style={s.dropdownItem}>
+                      <View style={s.rowBetween}>
+                        <View style={{ flex: 1, paddingRight: 12 }}>
+                          <Text style={[s.dropdownItemText, { fontWeight: "700" }]}>
+                            {entry.code}
+                          </Text>
+                          <Text style={s.hintText}>
+                            Expires: {entry.expires_at ? new Date(entry.expires_at).toLocaleString() : "—"}
+                          </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => copy(entry.code)}>
+                          <Text style={{ color: C.blue, fontWeight: "600" }}>
+                            {copiedCode === entry.code ? t("copied") : t("copy")}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+          <Text style={s.hintText}>
+            Each code is single-use and auto-expires after 48 hours if unused.
+          </Text>
           <View style={s.codeBg}>
             <Text style={s.codeSmall}>
               {t("inviteCodeGroupLabel").replace("{group}", group.name)}
             </Text>
-            <Text style={s.codeLarge}>{code}</Text>
+            <Text style={s.codeLarge}>{currentCode?.code ?? "—"}</Text>
           </View>
           <TouchableOpacity
-            style={[
-              s.btn,
-              { backgroundColor: copied ? C.greenLight : C.slate100 },
-            ]}
-            onPress={copy}
+            style={[s.btn, generating && s.btnDisabled]}
+            onPress={generate}
+            disabled={generating}
           >
-            <Text
-              style={{
-                color: copied ? C.green : C.slate700,
-                fontWeight: "600",
-              }}
-            >
-              {copied ? t("copied") : t("copy")}
-            </Text>
+            <Text style={s.btnText}>{generating ? t("loading") : "Generate New Code"}</Text>
           </TouchableOpacity>
+          {currentCode && (
+            <TouchableOpacity
+              style={[
+                s.btn,
+                { backgroundColor: copiedCode === currentCode.code ? C.greenLight : C.slate100 },
+              ]}
+              onPress={() => copy(currentCode.code)}
+            >
+              <Text
+                style={{
+                  color: copiedCode === currentCode.code ? C.green : C.slate700,
+                  fontWeight: "600",
+                }}
+              >
+                {copiedCode === currentCode.code ? t("copied") : t("copy")}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       );
     };
@@ -2272,6 +3019,31 @@ export default function CoachScreen({ state }: { state: CoachState }) {
       const { t } = useLanguage();
       const myGroups = teamGroups.filter((tg) => tg.coachId === currentUser.id);
 
+      const gameAges = parseAgeGroups(game.ageGroup);
+      const isAgeGenderFit = (g: (typeof myGroups)[0]) => {
+        const groupAges = parseAgeGroups(g.ageGroup);
+        const ageFit =
+          gameAges.length === 0 ||
+          groupAges.length === 0 ||
+          groupAges.some((age) => gameAges.includes(age));
+
+        const genderFit =
+          !game.gender ||
+          !g.gender ||
+          g.gender === game.gender;
+
+        return ageFit && genderFit;
+      };
+
+      const isAgeFit = (g: (typeof myGroups)[0]) => {
+        const groupAges = parseAgeGroups(g.ageGroup);
+        return (
+          gameAges.length === 0 ||
+          groupAges.length === 0 ||
+          groupAges.some((age) => gameAges.includes(age))
+        );
+      };
+
       const matchingGroups = myGroups.filter(
         (g) =>
           !!g.sport &&
@@ -2279,7 +3051,19 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           normalizeSportName(g.sport) === normalizeSportName(game.sport),
       );
 
-      const defaultId = matchingGroups[0]?.id ?? "";
+      const ageMatchedGroups = matchingGroups.filter((g) => {
+        const gameAges = parseAgeGroups(game.ageGroup);
+        const groupAges = parseAgeGroups(g.ageGroup);
+        if (gameAges.length === 0 || groupAges.length === 0) return true;
+        return groupAges.some((age) => gameAges.includes(age));
+      });
+
+      const candidateGroups = game.strictAgeMatch ? ageMatchedGroups : matchingGroups;
+
+      const defaultId =
+        candidateGroups.find((g) => isAgeGenderFit(g))?.id ??
+        candidateGroups[0]?.id ??
+        "";
       const [selectedGroupId, setSelectedGroupId] = useState(defaultId);
 
       const apply = async () => {
@@ -2287,97 +3071,119 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           showToast(t("fillRequiredFields"));
           return;
         }
-        try {
-          const data = await apiFetch("/match_applications", {
-            method: "POST",
-            body: {
-              gameId: game.id,
-              applicantCoachId: currentUser.id,
-              applicantGroupId: selectedGroupId,
-              status: "pending",
-            },
-          });
-          setMatchApplications((prev) => [...prev, mapMatchApp(data)]);
-          setModal(null);
-          showToast(t("applySent"));
-        } catch (err: any) {
-          showToast("Failed: " + err.message);
+        const doApply = async () => {
+          try {
+            const data = await apiFetch("/match_applications", {
+              method: "POST",
+              body: {
+                gameId: game.id,
+                applicantCoachId: currentUser.id,
+                applicantGroupId: selectedGroupId,
+                status: "pending",
+              },
+            });
+            setMatchApplications((prev) => [...prev, mapMatchApp(data)]);
+            if (game.creatorId && game.creatorId !== currentUser.id) {
+              const gameLabel = `${game.sport} @ ${game.location}`;
+              sendAppNotification(
+                game.creatorId,
+                `📥 ${notifI18n("notifMatchApplicationTitle")}`,
+                notifI18n("notifBodyMatchApplication", { coach: currentUser.name, gameLabel }),
+              );
+            }
+            setModal(null);
+            showToast(t("applySent"));
+          } catch (err: any) {
+            showToast("Failed: " + err.message);
+          }
+        };
+
+        const conflicts = findNearbyMatchesForGroup(
+          selectedGroupId,
+          game.time,
+          game.id,
+        );
+        if (conflicts.length > 0) {
+          Alert.alert(
+            t("scheduleConflictTitle"),
+            t("scheduleConflictApplyWarning").replace(
+              "{count}",
+              String(conflicts.length),
+            ),
+            [
+              { text: t("calCancel"), style: "cancel" },
+              { text: t("continueAnyway"), onPress: () => void doApply() },
+            ],
+          );
+          return;
         }
+
+        await doApply();
       };
 
-      const GroupRow = ({ g }: { g: (typeof myGroups)[0] }) => (
-        <TouchableOpacity
-          style={[
-            s.groupSelectRow,
-            selectedGroupId === g.id && s.groupSelectActive,
-          ]}
-          onPress={() => setSelectedGroupId(g.id)}
-        >
-          <View style={{ flex: 1 }}>
-            <Text
-              style={{
-                color: selectedGroupId === g.id ? C.blue : C.slate700,
-                fontWeight: "600",
-              }}
-            >
-              {g.name}
-            </Text>
-            <Text style={{ fontSize: 11, color: C.slate400, marginTop: 2 }}>
-              {(formatAgeGroupLabel(g.ageGroup) || "—") +
-                " · " +
-                (g.gender
-                  ? t(
-                      `gender${g.gender.charAt(0).toUpperCase() + g.gender.slice(1)}` as any,
-                    )
-                  : "—")}
-            </Text>
-          </View>
-          {selectedGroupId === g.id && <Check size={14} color={C.blue} />}
-        </TouchableOpacity>
-      );
+      const GroupRow = ({ g }: { g: (typeof myGroups)[0] }) => {
+        const selected = selectedGroupId === g.id;
+        const fullFit = isAgeGenderFit(g);
+        const ageOnlyFit = isAgeFit(g) && !fullFit;
+
+        return (
+          <TouchableOpacity
+            style={[
+              s.groupSelectRow,
+              fullFit && {
+                borderColor: "#22c55e",
+                backgroundColor: "#f0fdf4",
+              },
+              ageOnlyFit && {
+                borderColor: "#fcd34d",
+                backgroundColor: "#fefce8",
+              },
+              selected && s.groupSelectActive,
+            ]}
+            onPress={() => setSelectedGroupId(g.id)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{
+                  color: selected ? C.blue : C.slate700,
+                  fontWeight: "600",
+                }}
+              >
+                {g.name}
+              </Text>
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: fullFit ? "#16a34a" : ageOnlyFit ? "#a16207" : C.slate400,
+                  marginTop: 2,
+                }}
+              >
+                {(formatAgeGroupLabel(g.ageGroup) || "—") +
+                  " - " +
+                  (g.gender
+                    ? t(
+                        `gender${g.gender.charAt(0).toUpperCase() + g.gender.slice(1)}` as any,
+                      )
+                    : "—")}
+              </Text>
+            </View>
+            {selected && <Check size={14} color={C.blue} />}
+          </TouchableOpacity>
+        );
+      };
 
       return (
         <View style={{ gap: 12 }}>
           <Text style={s.label}>{t("selectGroupLabel")}</Text>
           {myGroups.length === 0 ? (
             <Text style={s.hintText}>{t("noGroupsCreateFirst")}</Text>
-          ) : matchingGroups.length === 0 ? (
+          ) : candidateGroups.length === 0 ? (
             <Text style={s.hintText}>{t("noMatchingGroupsForGame")}</Text>
           ) : (
             <>
-              {/* Matching groups — always visible */}
-              {matchingGroups.length > 0 && (
+              {candidateGroups.length > 0 && (
                 <>
-                  {!!game.sport && (
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 6,
-                        marginBottom: 2,
-                      }}
-                    >
-                      <View
-                        style={{
-                          width: 6,
-                          height: 6,
-                          borderRadius: 3,
-                          backgroundColor: C.green,
-                        }}
-                      />
-                      <Text
-                        style={{
-                          fontSize: 11,
-                          color: C.green,
-                          fontWeight: "700",
-                        }}
-                      >
-                        {t("matchingTeamsLabel")}
-                        {`  ${normalizeSportName(game.sport)}`}
-                      </Text>
-                    </View>
-                  )}
-                  {matchingGroups.map((g) => (
+                  {candidateGroups.map((g) => (
                     <GroupRow key={g.id} g={g} />
                   ))}
                 </>
@@ -2442,8 +3248,12 @@ export default function CoachScreen({ state }: { state: CoachState }) {
             payload.forEach(({ playerId }) =>
               sendAppNotification(
                 playerId,
-                `🏅 比赛邀请 / Game Invitation`,
-                `${currentUser.name} invited you to play "${gameLabel}" on ${new Date(game.time).toLocaleString()}.`,
+                `🏅 ${notifI18n("notifGameInvitationTitle")}`,
+                notifI18n("notifBodyGameInvitation", {
+                  coach: currentUser.name,
+                  gameLabel,
+                  time: game.time,
+                }),
               ),
             );
           }
@@ -2537,7 +3347,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               <Key size={15} color={C.slate400} />
               <TextInput
                 style={[s.searchInput, { textTransform: "uppercase" }]}
-                placeholder="输入邀请码查看私密比赛"
+                placeholder={t("privateInviteLookupPlaceholder")}
                 placeholderTextColor={C.slate400}
                 value={inviteCodeInput}
                 onChangeText={(v) => setInviteCodeInput(v.toUpperCase())}
@@ -2572,14 +3382,10 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                       return next;
                     });
                     setInviteCodeInput("");
-                    showToast("已找到比赛，可在下方申请对战");
-                    setExpandedDiscoverIds((prev) => {
-                      const next = new Set(prev);
-                      next.add(game.id);
-                      return next;
-                    });
+                    showToast(t("privateInviteLookupSuccess"));
+                    setExpandedDiscoverId(game.id);
                   } catch {
-                    showToast("邀请码无效或比赛不存在");
+                    showToast(t("privateInviteLookupFail"));
                   } finally {
                     setInviteCodeLooking(false);
                   }
@@ -2592,7 +3398,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                     fontWeight: "600",
                   }}
                 >
-                  查找
+                  {t("lookupBtn")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -2624,7 +3430,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                 "mixed",
               ];
               // 全部 = 清空该组 (length===0 代表不限制)
-              const sportIsAll = filterSport.length === 0;
+              const sportIsAll = !filterSport;
               const ageIsAll = filterAgeGroup.length === 0;
               const genderIsAll = filterGender.length === 0;
               return (
@@ -2640,7 +3446,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                   >
                     <TouchableOpacity
                       style={[s.filterChip, sportIsAll && s.filterChipActive]}
-                      onPress={() => setFilterSport([])}
+                      onPress={() => setFilterSport("")}
                     >
                       <Text
                         style={[
@@ -2656,14 +3462,14 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                         key={opt}
                         style={[
                           s.filterChip,
-                          filterSport.includes(opt) && s.filterChipActive,
+                          filterSport === opt && s.filterChipActive,
                         ]}
-                        onPress={() => toggleFilter(setFilterSport, opt)}
+                        onPress={() => setFilterSport(opt)}
                       >
                         <Text
                           style={[
                             s.filterChipText,
-                            filterSport.includes(opt) && s.filterChipTextActive,
+                            filterSport === opt && s.filterChipTextActive,
                           ]}
                         >
                           {sportEmoji(opt)} {opt}
@@ -2782,9 +3588,9 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                   (g) =>
                     g.creatorId !== currentUser.id &&
                     g.status === "open" &&
+                    new Date(g.time).getTime() > Date.now() &&
                     (!g.isPrivate || unlockedPrivateGameIds.has(g.id)) &&
-                    (filterSport.length === 0 ||
-                      filterSport.includes(g.sport)) &&
+                    (!filterSport || filterSport === g.sport) &&
                     (filterAgeGroup.length === 0 ||
                       filterAgeGroup.some((f) =>
                         matchesAgeFilter(g.ageGroup, f),
@@ -2813,6 +3619,8 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                       );
                     })(),
                 )
+                .slice()
+                .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
                 .map((game) => {
                   const creator = users.find((u) => u.id === game.creatorId);
                   const homeGroup = teamGroups.find(
@@ -2841,11 +3649,15 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                           <Text style={s.cardTitle}>
                             {sportEmoji(game.sport)}
                             {" - "}
-                            {displayClub
-                              ? displayClub.name
-                              : (creator?.name ?? game.sport)}
-                            {" - "}
-                            {game.ageGroup}
+                            {(() => {
+                              const clubName = displayClub?.name ?? (homeGroup?.name ?? creator?.name ?? game.sport);
+                              const teamAge = homeGroup?.ageGroup ? formatAgeGroupLabel(homeGroup.ageGroup) : null;
+                              const searchAge = game.ageGroup;
+                              if (teamAge && teamAge !== searchAge) {
+                                return `${clubName} - ${teamAge} → ${searchAge}`;
+                              }
+                              return `${clubName} - ${searchAge}`;
+                            })()}
                           </Text>
                           <View
                             style={{
@@ -2859,7 +3671,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                 {game.status.toUpperCase()}
                               </Text>
                             </View>
-                            {expandedDiscoverIds.has(game.id) ? (
+                            {expandedDiscoverId === game.id ? (
                               <ChevronDown size={16} color={C.slate400} />
                             ) : (
                               <ChevronRight size={16} color={C.slate400} />
@@ -2884,7 +3696,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                       </TouchableOpacity>
 
                       {/* Collapsible details */}
-                      {expandedDiscoverIds.has(game.id) && (
+                      {expandedDiscoverId === game.id && (
                         <View style={{ marginTop: 6 }}>
                           {!!game.contactPhone && (
                             <TouchableOpacity
@@ -2900,8 +3712,13 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                           <TouchableOpacity
                             onPress={() => openCoachProfileModal(creator)}
                           >
-                            <Text style={[s.metaRow, { color: C.blue }]}>
+                            <Text style={[s.metaRow, { color: C.blue }]}> 
                               👤 {t("createdBy")}: {creator?.name}
+                              {typeof creator?.gamesPlayedCount === "number" && (
+                                <Text style={{ color: C.slate500 }}>
+                                  {` (${t("gamesPlayedCountShort")}: ${creator.gamesPlayedCount})`}
+                                </Text>
+                              )}
                             </Text>
                           </TouchableOpacity>
                           {game.gender && (
@@ -2974,34 +3791,56 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                 <Plus size={20} color={C.blue} />
               </TouchableOpacity>
             </View>
-            {allMyGames
-              .filter((game) => game.status !== "locked")
-              .map((game) => (
-                <GameManagementCard
-                  key={game.id}
-                  game={game}
-                  state={{ ...state, showToast, setModal, clubs }}
-                />
-              ))}
+            {sortedMyOpenGames.map((game) => (
+              <GameManagementCard
+                key={game.id}
+                game={game}
+                expanded={isManagedGameExpanded(game)}
+                onToggleExpand={(nextExpanded) =>
+                  setManagedGameExpanded(game.id, nextExpanded)
+                }
+                state={{ ...state, showToast, setModal, clubs }}
+              />
+            ))}
           </View>
         )}
 
         {/* ===== CONFIRMED TAB ===== */}
         {tab === "confirmed" && (
           <View>
-            <Text style={s.sectionTitle}>{t("confirmedGamesLabel")}</Text>
-            {allMyGames.filter((g) => g.status === "locked").length === 0 && (
+            <View style={s.rowBetween}>
+              <Text style={s.sectionTitle}>{t("confirmedGamesLabel")}</Text>
+              <Text style={s.hintText}>
+                {t("coachCancellationCountLabel").replace(
+                  "{count}",
+                  String(coachCancellationCount),
+                )}
+              </Text>
+            </View>
+            {allMyGames.filter((g) => g.status === "locked" && new Date(g.time).getTime() > Date.now()).length === 0 && (
               <View style={s.emptyBox}>
                 <Text style={s.emptyText}>{t("noConfirmedGames")}</Text>
               </View>
             )}
             {allMyGames
-              .filter((g) => g.status === "locked")
+              .filter((g) => g.status === "locked" && new Date(g.time).getTime() > Date.now())
+              .slice()
+              .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
               .map((game) => (
                 <GameManagementCard
                   key={game.id}
                   game={game}
-                  state={{ ...state, showToast, setModal, clubs }}
+                  expanded={isManagedGameExpanded(game)}
+                  onToggleExpand={(nextExpanded) =>
+                    setManagedGameExpanded(game.id, nextExpanded)
+                  }
+                  state={{
+                    ...state,
+                    showToast,
+                    setModal,
+                    clubs,
+                    onCoachCancellationCountChanged: setCoachCancellationCount,
+                  }}
                 />
               ))}
           </View>
@@ -3252,6 +4091,13 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                             <>
                               {group.playerIds.map((pid) => {
                                 const player = users.find((u) => u.id === pid);
+                                const playerDisplayName =
+                                  getCoachPlayerDisplayName(
+                                    coachPlayerNotes,
+                                    currentUser.id,
+                                    pid,
+                                    player?.name,
+                                  );
                                 return (
                                   <View
                                     key={pid}
@@ -3275,7 +4121,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                             fontSize: 13,
                                           }}
                                         >
-                                          {player?.name}
+                                          {playerDisplayName}
                                         </Text>
                                         <Text style={s.subText}>{player?.email}</Text>
                                       </View>
@@ -3284,10 +4130,21 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                       <TouchableOpacity
                                         style={s.iconBtnSm}
                                         onPress={() =>
+                                          openEditPlayerNicknameModal(
+                                            pid,
+                                            player?.name ?? "",
+                                          )
+                                        }
+                                      >
+                                        <Pencil size={13} color={C.slate600} />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity
+                                        style={s.iconBtnSm}
+                                        onPress={() =>
                                           openMovePlayerModal(
                                             group.id,
                                             pid,
-                                            player?.name ?? "",
+                                            playerDisplayName,
                                           )
                                         }
                                       >
@@ -3299,7 +4156,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                           confirmRemovePlayer(
                                             group.id,
                                             pid,
-                                            player?.name ?? "",
+                                            playerDisplayName,
                                           )
                                         }
                                       >
@@ -3310,6 +4167,15 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                 );
                               })}
                               {group.offlinePlayers.map((op) => (
+                                (() => {
+                                  const offlineDisplayName =
+                                    getCoachPlayerDisplayName(
+                                      coachPlayerNotes,
+                                      currentUser.id,
+                                      op.id,
+                                      op.name,
+                                    );
+                                  return (
                                 <View
                                   key={op.id}
                                   style={[s.playerRow, { paddingVertical: 6 }]}
@@ -3334,31 +4200,43 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                           fontSize: 13,
                                         }}
                                       >
-                                        {op.name}
+                                        {offlineDisplayName}
                                       </Text>
                                       <Text
                                         style={[s.subText, { color: C.slate400 }]}
                                       >
                                         {t("offlineNoAccountLabel")}
                                         {op.bindCode
-                                          ? ` · ${t("bindCodeLabel")} ${op.bindCode}`
+                                          ? ` - ${t("bindCodeLabel")} ${op.bindCode}`
                                           : ""}
                                       </Text>
                                     </View>
                                   </View>
-                                  <TouchableOpacity
-                                    style={s.iconBtnSm}
-                                    onPress={() =>
-                                      confirmRemoveOfflinePlayer(
-                                        group.id,
-                                        op.id,
-                                        op.name,
-                                      )
-                                    }
-                                  >
-                                    <UserX size={13} color={C.red} />
-                                  </TouchableOpacity>
+                                  <View style={{ flexDirection: "row", gap: 4 }}>
+                                    <TouchableOpacity
+                                      style={s.iconBtnSm}
+                                      onPress={() =>
+                                        openEditPlayerNicknameModal(op.id, op.name)
+                                      }
+                                    >
+                                      <Pencil size={13} color={C.slate600} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={s.iconBtnSm}
+                                      onPress={() =>
+                                        confirmRemoveOfflinePlayer(
+                                          group.id,
+                                          op.id,
+                                          offlineDisplayName,
+                                        )
+                                      }
+                                    >
+                                      <UserX size={13} color={C.red} />
+                                    </TouchableOpacity>
+                                  </View>
                                 </View>
+                                  );
+                                })()
                               ))}
                             </>
                           )}
@@ -3526,6 +4404,17 @@ export default function CoachScreen({ state }: { state: CoachState }) {
         )}
       </ScrollView>
 
+      {tab === "confirmed" && (
+        <TouchableOpacity
+          style={s.historyFloatingBtn}
+          onPress={openCoachHistoryModal}
+          activeOpacity={0.85}
+        >
+          <History size={18} color={C.white} />
+          <Text style={s.historyFloatingBtnText}>{t("coachHistoryBtn")}</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Bottom nav */}
       <View
         style={[s.bottomNav, { paddingBottom: Math.max(insets.bottom, 8) }]}
@@ -3659,6 +4548,11 @@ function parseSports(sport: string | null): string[] {
   return Array.from(new Set(normalized));
 }
 
+function isValidPhoneNumber(phone: string): boolean {
+  const cleaned = phone.trim().replace(/\s/g, "").replace(/^(\+30|0030)/, "");
+  return /^69\d{8}$/.test(cleaned);
+}
+
 function parseAgeGroups(ageGroup: string | null | undefined): string[] {
   if (!ageGroup) return [];
   return ageGroup
@@ -3736,19 +4630,30 @@ function fmtDateTime(iso: string): string {
 // ==========================================
 function GameManagementCard({
   game,
+  expanded,
+  onToggleExpand,
   state,
 }: {
   game: Game;
+  expanded: boolean;
+  onToggleExpand: (nextExpanded: boolean) => void;
   state: CoachState & {
     setModal: React.Dispatch<React.SetStateAction<ModalConfig | null>>;
     clubs: Club[];
+    onCoachCancellationCountChanged?: (count: number) => void;
   };
 }) {
   const {
     currentUser,
+    setCurrentUser,
+    setUsers,
     matchApplications,
     setMatchApplications,
     setGames,
+    coachPlayerNotes,
+    setCoachPlayerNotes,
+    offlineParticipationByGame,
+    setOfflineParticipationByGame,
     rosters,
     setRosters,
     teamGroups,
@@ -3756,6 +4661,7 @@ function GameManagementCard({
     showToast,
     setModal,
     clubs,
+    onCoachCancellationCountChanged,
   } = state;
   const { t } = useLanguage();
 
@@ -3763,14 +4669,14 @@ function GameManagementCard({
   const awayCoach = game.opposingTeamId
     ? users.find((u) => u.id === game.opposingTeamId)
     : null;
+  const isHomeForCurrentCoach = game.creatorId === currentUser.id;
   const opponentCoach =
-    game.creatorId === currentUser.id ? awayCoach : homeCoach;
+    isHomeForCurrentCoach ? awayCoach : homeCoach;
   const awayGroup = game.opposingGroupId
     ? teamGroups.find((tg) => tg.id === game.opposingGroupId)
     : null;
-  const opponentGroup = awayGroup;
-  // Resolve display club: prefer the home group's club, fall back to creator's default club
   const homeGroup = teamGroups.find((tg) => tg.id === game.homeGroupId);
+  const opponentGroup = isHomeForCurrentCoach ? awayGroup : homeGroup;
   const homeGroupClub = homeGroup?.clubId
     ? clubs.find((c) => c.id === homeGroup.clubId)
     : null;
@@ -3782,58 +4688,163 @@ function GameManagementCard({
     ? clubs.find((c) => c.id === awayGroup.clubId)
     : null;
   const homeTeamDisplay = homeGroup
-    ? `${homeGroupClub?.name ?? creatorClub?.name ?? "—"} · ${homeGroup.name}`
+    ? `${homeGroupClub?.name ?? creatorClub?.name ?? "—"} - ${homeGroup.name}`
     : "—";
   const awayTeamDisplay = awayGroup
-    ? `${awayGroupClub?.name ?? "—"} · ${awayGroup.name}`
+    ? `${awayGroupClub?.name ?? "—"} - ${awayGroup.name}`
     : t("pendingLabel");
+  const opponentGroupClub = opponentGroup?.clubId
+    ? clubs.find((c) => c.id === opponentGroup.clubId)
+    : null;
+  const opponentDisplay =
+    opponentGroup
+      ? `${opponentGroupClub?.name ? `${opponentGroupClub.name} - ` : ""}${opponentGroup.name}`
+      : opponentCoach?.name ?? t("pendingLabel");
+  const venueRole = isHomeForCurrentCoach
+    ? t("matchVenueHome")
+    : t("matchVenueAway");
+  const titleTimeText =
+    game.status === "locked" ? fmtDateTime(game.time) : fmtDate(game.time);
+
   const pendingOpponents = matchApplications.filter(
     (m) => m.gameId === game.id && m.status === "pending",
   );
   const gameRoster = rosters.filter((r) => r.gameId === game.id);
+  const managedGroupId =
+    game.creatorId === currentUser.id ? game.homeGroupId : game.opposingGroupId;
+  const managedGroup = managedGroupId
+    ? teamGroups.find((tg) => tg.id === managedGroupId) ?? null
+    : null;
+  const managedPlayerIds = new Set(managedGroup?.playerIds ?? []);
+
   const offlinePlayersById = new Map(
     teamGroups
       .flatMap((tg) => tg.offlinePlayers)
       .map((p) => [p.id, p.name] as const),
   );
-  const trackedOfflineIds = new Set(
-    gameRoster
-      .filter((r) => offlinePlayersById.has(r.playerId))
-      .map((r) => r.playerId),
-  );
-  const defaultOfflineParticipants = (homeGroup?.offlinePlayers ?? []).filter(
-    (p) => !trackedOfflineIds.has(p.id),
-  );
-  const [offlineParticipationMap, setOfflineParticipationMap] = useState<
-    Record<string, "approved" | "not_participating">
-  >({});
-  const locallyParticipatingOffline = defaultOfflineParticipants.filter(
-    (p) => (offlineParticipationMap[p.id] ?? "approved") === "approved",
-  );
-  const locallyNotParticipatingOffline = defaultOfflineParticipants.filter(
-    (p) =>
-      (offlineParticipationMap[p.id] ?? "approved") === "not_participating",
-  );
+
+  const offlineRosterState = offlineParticipationByGame[game.id] ?? {};
 
   const participatingPlayers = gameRoster.filter(
     (r) =>
-      r.status === "approved" ||
-      r.status === "pending_coach" ||
-      r.status === "pending_guardian",
+      managedPlayerIds.has(r.playerId) &&
+      (r.status === "approved" ||
+        r.status === "pending_coach" ||
+        r.status === "pending_guardian"),
   );
-  const nonParticipatingPlayers = gameRoster.filter(
-    (r) => r.status === "not_participating" || r.status === "withdrawn",
-  );
-
-  const [expanded, setExpanded] = useState(
-    pendingOpponents.length > 0 || participatingPlayers.length > 0,
+  const waitingConfirmationPlayers = gameRoster.filter(
+    (r) => managedPlayerIds.has(r.playerId) && r.status === "invited",
   );
 
-  const volunteerNames = game.volunteers?.length
-    ? game.volunteers
-        .map((vId) => users.find((u) => u.id === vId)?.name)
-        .join(", ")
-    : "None";
+  const managedOfflinePlayers = managedGroup?.offlinePlayers ?? [];
+  const participatingOfflinePlayers = managedOfflinePlayers.filter(
+    (p) => offlineRosterState[p.id] === "participating",
+  );
+  const waitingOfflinePlayers = managedOfflinePlayers.filter(
+    (p) => offlineRosterState[p.id] === "waiting",
+  );
+
+  const hasRosterColumns =
+    participatingPlayers.length > 0 ||
+    waitingConfirmationPlayers.length > 0 ||
+    participatingOfflinePlayers.length > 0 ||
+    waitingOfflinePlayers.length > 0;
+
+  const [ageGenderExpanded, setAgeGenderExpanded] = useState(true);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(true);
+
+  const handleAddGameToCalendar = async () => {
+    try {
+      const result = await addMatchToSystemCalendar({
+        title: `${displayClub ? displayClub.name : (homeCoach?.name ?? game.sport)} Match`,
+        startIso: game.time,
+        location: game.location,
+        notes: game.description || game.contactPhone || undefined,
+      });
+      showToast(`${t("calendarAdded")} (${result.calendarTitle})`);
+    } catch (err) {
+      if (err instanceof CalendarAddError) {
+        if (err.code === "permission_denied") {
+          showToast(t("calendarPermissionDenied"));
+          return;
+        }
+        if (err.code === "calendar_unavailable") {
+          showToast(t("calendarUnavailable"));
+          return;
+        }
+        if (err.code === "invalid_date") {
+          showToast(t("calendarInvalidDate"));
+          return;
+        }
+        if (err.code === "event_not_found") {
+          showToast(`${t("calendarAddFailed")}: event was not verifiable`);
+          return;
+        }
+      }
+      const unknownReason =
+        err instanceof Error && err.message ? `: ${err.message}` : "";
+      showToast(`${t("calendarAddFailed")}${unknownReason}`);
+    }
+  };
+
+  const openEditPlayerNicknameModal = (
+    playerId: string,
+    fallbackName: string,
+  ) => {
+    const existingNickname =
+      getCoachPlayerNickname(coachPlayerNotes, currentUser.id, playerId) || "";
+    const ModalContent = () => {
+      const [nickname, setNickname] = useState(existingNickname);
+      const [saving, setSaving] = useState(false);
+      const save = async () => {
+        setSaving(true);
+        try {
+          const saved = await saveCoachPlayerNote(
+            currentUser.id,
+            playerId,
+            nickname,
+          );
+          setCoachPlayerNotes((prev) => {
+            const next = prev.filter(
+              (item) =>
+                !(item.coachId === currentUser.id && item.playerId === playerId),
+            );
+            return saved ? [...next, saved] : next;
+          });
+          setModal(null);
+          showToast(saved ? t("coachNoteSaved") : t("coachNoteDeleted"));
+        } catch (err: any) {
+          showToast("Failed: " + err.message);
+        } finally {
+          setSaving(false);
+        }
+      };
+
+      return (
+        <View style={{ gap: 12 }}>
+          <Text style={s.hintText}>{fallbackName}</Text>
+          <FieldInput
+            label={t("coachNoteLabel")}
+            value={nickname}
+            onChangeText={setNickname}
+            placeholder={t("coachNotePlaceholder")}
+          />
+          <TouchableOpacity
+            style={[s.btn, saving && s.btnDisabled]}
+            onPress={save}
+            disabled={saving}
+          >
+            <Text style={s.btnText}>{saving ? t("coachNoteSaving") : t("save")}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    };
+
+    setModal({
+      title: t("coachNoteModalTitle"),
+      content: <ModalContent />,
+    });
+  };
 
   const handleAcceptOpponent = async (app: MatchApplication) => {
     try {
@@ -3852,11 +4863,24 @@ function GameManagementCard({
         prev.map((g) => (g.id === game.id ? mapGame(updatedGame) : g)),
       );
       showToast("Opponent accepted! Game locked.");
+      // Update local games played count (backend increments when game is locked)
+      if (setUsers) {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === app.applicantCoachId
+              ? { ...u, gamesPlayedCount: (u.gamesPlayedCount ?? 0) + 1 }
+              : u,
+          ),
+        );
+      }
+      setCurrentUser((prev) =>
+        prev ? { ...prev, gamesPlayedCount: (prev.gamesPlayedCount ?? 0) + 1 } : prev,
+      );
       const gameLabel = `${game.sport} @ ${game.location}`;
       sendAppNotification(
         app.applicantCoachId,
-        "✅ Match Accepted",
-        `Your application for "${gameLabel}" was accepted by ${currentUser.name}!`,
+        `\u2705 ${notifI18n("notifMatchAcceptedTitle")}`,
+        notifI18n("notifBodyMatchAccepted", { coach: currentUser.name, gameLabel }),
       );
     } catch (err: any) {
       showToast("Failed: " + err.message);
@@ -3885,13 +4909,14 @@ function GameManagementCard({
         prev.map((r) => (r.id === entry.id ? { ...r, status: "approved" } : r)),
       );
       showToast("Player approved!");
-      // Notify the player
-      const game = state.games.find((g) => g.id === entry.gameId);
-      const gameLabel = game ? `${game.sport} @ ${game.location}` : "a game";
+      const linkedGame = state.games.find((g) => g.id === entry.gameId);
+      const gameLabel = linkedGame
+        ? `${linkedGame.sport} @ ${linkedGame.location}`
+        : "a game";
       sendAppNotification(
         entry.playerId,
-        "✅ 报名已批准 / Roster Approved",
-        `${currentUser.name} approved your spot for "${gameLabel}". You're in!`,
+        `\u2705 ${notifI18n("notifRosterApprovedTitle")}`,
+        notifI18n("notifBodyRosterApproved", { coach: currentUser.name, gameLabel }),
       );
     } catch (err: any) {
       showToast("Failed: " + err.message);
@@ -3939,25 +4964,17 @@ function GameManagementCard({
     }
   };
 
-  const handleSetOfflineParticipation = async (
+  const setOfflineStatus = (
     offlinePlayerId: string,
-    status: "approved" | "not_participating",
+    next: "waiting" | "participating" | "out",
   ) => {
-    const existing = gameRoster.find((r) => r.playerId === offlinePlayerId);
-    if (existing) {
-      await handleSetParticipation(existing, status);
-      return;
-    }
-
-    setOfflineParticipationMap((prev) => ({
+    setOfflineParticipationByGame((prev) => ({
       ...prev,
-      [offlinePlayerId]: status,
+      [game.id]: {
+        ...(prev[game.id] ?? {}),
+        [offlinePlayerId]: next,
+      },
     }));
-    showToast(
-      status === "approved"
-        ? t("setToParticipatingToast")
-        : t("setToNotParticipatingToast"),
-    );
   };
 
   const handleDeleteGame = () => {
@@ -3988,6 +5005,107 @@ function GameManagementCard({
     });
   };
 
+  const openCancelGameModal = () => {
+    const ModalContent = () => {
+      const [reason, setReason] = useState("");
+
+      const cancelMatch = async () => {
+        if (!reason.trim()) {
+          showToast(t("reasonRequired"));
+          return;
+        }
+
+        try {
+          const gameLabel = `${game.sport} @ ${game.location}`;
+          const opposingCoachId =
+            game.creatorId === currentUser.id
+              ? game.opposingTeamId
+              : game.creatorId;
+          if (opposingCoachId) {
+            sendAppNotification(
+              opposingCoachId,
+              `🚫 ${notifI18n("notifMatchCancelledTitle")}`,
+              notifI18n("notifBodyMatchCancelled", {
+                coach: currentUser.name,
+                gameLabel,
+                reason: reason.trim(),
+              }),
+            );
+          }
+          // Notify all players in the roster and their guardians
+          for (const entry of gameRoster) {
+            if (!entry.playerId || entry.playerId === currentUser.id) continue;
+            sendAppNotification(
+              entry.playerId,
+              `🚫 ${notifI18n("notifMatchCancelledTitle")}`,
+              notifI18n("notifBodyMatchCancelled", {
+                coach: currentUser.name,
+                gameLabel,
+                reason: reason.trim(),
+              }),
+            );
+            const player = users.find((u) => u.id === entry.playerId);
+            if (player?.guardianId) {
+              sendAppNotification(
+                player.guardianId,
+                `🚫 ${notifI18n("notifMatchCancelledTitle")}`,
+                notifI18n("notifBodyMatchCancelled", {
+                  coach: currentUser.name,
+                  gameLabel,
+                  reason: reason.trim(),
+                }),
+              );
+            }
+          }
+
+          await apiFetch(`/games/${game.id}`, { method: "DELETE" });
+          setGames((prev) => prev.filter((g) => g.id !== game.id));
+
+          const nextCancellationCount = await incrementCoachCancellationCount(
+            currentUser.id,
+          );
+          onCoachCancellationCountChanged?.(nextCancellationCount);
+
+          setModal(null);
+          showToast(
+            t("matchCancelledSuccess").replace(
+              "{count}",
+              String(nextCancellationCount),
+            ),
+          );
+        } catch (err: any) {
+          showToast("Failed: " + err.message);
+        }
+      };
+
+      return (
+        <View style={{ gap: 12 }}>
+          <Text style={s.hintText}>{t("cancelMatchReasonPrompt")}</Text>
+          <TextInput
+            style={[s.input, { minHeight: 88, textAlignVertical: "top" }]}
+            value={reason}
+            onChangeText={setReason}
+            placeholder={t("cancelMatchReasonPrompt")}
+            placeholderTextColor={C.slate400}
+            multiline
+          />
+          <TouchableOpacity
+            style={[s.btn, { backgroundColor: C.red }, !reason.trim() && s.btnDisabled]}
+            onPress={cancelMatch}
+            disabled={!reason.trim()}
+          >
+            <Text style={s.btnText}>{t("cancelMatchBtn")}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    };
+
+    setModal({
+      title: t("cancelMatchTitle"),
+      content: <ModalContent />,
+    });
+  };
+
   const openEditGameModal = () => {
     const ModalContent = () => {
       const { t } = useLanguage();
@@ -4001,10 +5119,30 @@ function GameManagementCard({
       const [description, setDescription] = useState(game.description);
       const [contactPhone, setContactPhone] = useState(game.contactPhone ?? "");
       const [submitted, setSubmitted] = useState(false);
+
+      const handleTimeChange = (nextTime: string) => {
+        if (!nextTime) {
+          setTime("");
+          return;
+        }
+        const parsed = new Date(nextTime).getTime();
+        if (!Number.isFinite(parsed)) {
+          setTime("");
+          showToast(t("invalidMatchTime"));
+          return;
+        }
+        setTime(nextTime);
+      };
+
       const save = async () => {
+        const normalizedContactPhone = contactPhone.trim();
         if (!time || !location || !ageGroup) {
           setSubmitted(true);
           showToast(t("fillRequiredFields"));
+          return;
+        }
+        if (normalizedContactPhone && !isValidPhoneNumber(normalizedContactPhone)) {
+          showToast(t("invalidPhoneFormat"));
           return;
         }
         try {
@@ -4016,7 +5154,7 @@ function GameManagementCard({
               ageGroup,
               gender: gender || null,
               description,
-              contactPhone: contactPhone || null,
+              contactPhone: normalizedContactPhone || null,
             },
           });
           setGames((prev) =>
@@ -4024,23 +5162,26 @@ function GameManagementCard({
           );
           setModal(null);
           showToast("Match updated!");
-          // Notify all rostered players + opposing coach about the update
-          const gameLabel = `${game.sport} @ ${location}`;
-          const notifBody = `Match details updated by ${currentUser.name}.\n📅 ${time}\n📍 ${location}`;
+
+          const notifBody = notifI18n("notifBodyGameUpdated", {
+            coach: currentUser.name,
+            time,
+            location,
+          });
           const gameRosters = rosters.filter(
             (r) => r.gameId === game.id && r.status !== "withdrawn",
           );
           gameRosters.forEach((r) =>
             sendAppNotification(
               r.playerId,
-              `📝 比赛信息更新 / Game Updated`,
+              `\ud83d\udcdd ${notifI18n("notifGameUpdatedTitle")}`,
               notifBody,
             ),
           );
           if (game.opposingTeamId) {
             sendAppNotification(
               game.opposingTeamId,
-              `📝 比赛信息更新 / Game Updated`,
+              `\ud83d\udcdd ${notifI18n("notifGameUpdatedTitle")}`,
               notifBody,
             );
           }
@@ -4048,12 +5189,13 @@ function GameManagementCard({
           showToast("Failed: " + err.message);
         }
       };
+
       return (
         <View style={{ gap: 12 }}>
           <DatePickerField
             label={t("matchTimeLabel")}
             value={time}
-            onChange={setTime}
+            onChange={handleTimeChange}
             mode="datetime"
             inputStyle={submitted && !time ? s.fieldError : undefined}
           />
@@ -4064,24 +5206,18 @@ function GameManagementCard({
             placeholder="City Stadium"
             error={submitted && !location}
           />
-          {/* Age group collapsible picker */}
           <View>
             <Text style={s.fieldLabel}>{t("ageGroupLabel")} *</Text>
             <TouchableOpacity
-              style={[
-                s.dropdownTrigger,
-                submitted && !ageGroup && s.inputError,
-              ]}
+              style={[s.dropdownTrigger, submitted && !ageGroup && s.inputError]}
               onPress={() => setAgeGroupOpen((v) => !v)}
             >
               <Text
                 style={ageGroup ? s.dropdownValueText : s.dropdownPlaceholder}
               >
-                {ageGroup || "U10 – U21"}
+                {ageGroup || "U10 \u2013 U21"}
               </Text>
-              <Text style={{ color: C.slate400 }}>
-                {ageGroupOpen ? "▲" : "▼"}
-              </Text>
+              <Text style={{ color: C.slate400 }}>{ageGroupOpen ? "\u25b2" : "\u25bc"}</Text>
             </TouchableOpacity>
             {ageGroupOpen && (
               <View style={s.dropdownList}>
@@ -4102,10 +5238,7 @@ function GameManagementCard({
                 ].map((opt) => (
                   <TouchableOpacity
                     key={opt}
-                    style={[
-                      s.dropdownItem,
-                      ageGroup === opt && s.dropdownItemActive,
-                    ]}
+                    style={[s.dropdownItem, ageGroup === opt && s.dropdownItemActive]}
                     onPress={() => {
                       setAgeGroup(opt);
                       setAgeGroupOpen(false);
@@ -4124,7 +5257,6 @@ function GameManagementCard({
               </View>
             )}
           </View>
-          {/* Gender picker */}
           <View>
             <Text style={s.fieldLabel}>{t("genderLabel")}</Text>
             <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
@@ -4152,7 +5284,7 @@ function GameManagementCard({
             label={t("detailsContactLabel")}
             value={description}
             onChangeText={setDescription}
-            placeholder="Description, 预计时长…"
+            placeholder="Description, \u9884\u8ba1\u65f6\u957f\u2026"
             multiline
           />
           <FieldInput
@@ -4167,6 +5299,7 @@ function GameManagementCard({
         </View>
       );
     };
+
     setModal({
       title: t("editMatchTitle"),
       content: <ModalContent />,
@@ -4182,94 +5315,300 @@ function GameManagementCard({
           (!game.ageGroup || g.ageGroup === game.ageGroup) &&
           (!game.gender || g.gender === game.gender),
       );
+      const fixedGroup = managedGroup
+        ? myGroups.find((tg) => tg.id === managedGroup.id) ?? null
+        : null;
+
       const [selectedGroupId, setSelectedGroupId] = useState(
-        matchingGroups[0]?.id ?? "",
+        fixedGroup?.id ?? matchingGroups[0]?.id ?? "",
       );
+
+      const selectedGroup = fixedGroup
+        ? fixedGroup
+        : matchingGroups.find((g) => g.id === selectedGroupId) ?? null;
+
+      type InviteCandidate = {
+        id: string;
+        name: string;
+        isOffline: boolean;
+        rosterEntry?: RosterEntry;
+      };
+
+      const rosterByPlayerId = new Map(
+        gameRoster.map((r) => [r.playerId, r] as const),
+      );
+
+      const allCandidates: InviteCandidate[] = selectedGroup
+        ? [
+            ...selectedGroup.playerIds.map((pid) => ({
+              id: pid,
+              name: getCoachPlayerDisplayName(
+                coachPlayerNotes,
+                currentUser.id,
+                pid,
+                users.find((u) => u.id === pid)?.name,
+              ),
+              isOffline: false,
+              rosterEntry: rosterByPlayerId.get(pid),
+            })),
+            ...selectedGroup.offlinePlayers.map((p) => ({
+              id: p.id,
+              name: getCoachPlayerDisplayName(
+                coachPlayerNotes,
+                currentUser.id,
+                p.id,
+                p.name,
+              ),
+              isOffline: true,
+              rosterEntry: rosterByPlayerId.get(p.id),
+            })),
+          ]
+        : [];
+
+      const eligibleCandidates = allCandidates.filter((p) => {
+        if (p.rosterEntry) {
+          if (
+            p.rosterEntry.status === "approved" ||
+            p.rosterEntry.status === "pending_coach" ||
+            p.rosterEntry.status === "pending_guardian" ||
+            p.rosterEntry.status === "invited"
+          ) {
+            return false;
+          }
+          return p.rosterEntry.status === "not_participating";
+        }
+
+        if (p.isOffline) {
+          const offlineState = offlineRosterState[p.id];
+          return offlineState !== "waiting" && offlineState !== "participating";
+        }
+
+        return true;
+      });
+
+      const [selectedToInviteIds, setSelectedToInviteIds] = useState<Set<string>>(
+        () => new Set(eligibleCandidates.map((p) => p.id)),
+      );
+
+      const selectedCandidates = eligibleCandidates.filter((p) =>
+        selectedToInviteIds.has(p.id),
+      );
+      const outCandidates = eligibleCandidates.filter(
+        (p) => !selectedToInviteIds.has(p.id),
+      );
+
+      const moveToOut = (playerId: string) =>
+        setSelectedToInviteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(playerId);
+          return next;
+        });
+
+      const moveToInvite = (playerId: string) =>
+        setSelectedToInviteIds((prev) => {
+          const next = new Set(prev);
+          next.add(playerId);
+          return next;
+        });
+
       const send = async () => {
-        const group = teamGroups.find((tg) => tg.id === selectedGroupId);
-        if (!group) return;
+        if (!selectedGroup || selectedCandidates.length === 0) return;
         try {
-          const payload = group.playerIds
-            .filter(
-              (pid) =>
-                !rosters.some(
-                  (r) => r.gameId === game.id && r.playerId === pid,
-                ),
-            )
-            .map((pid) => ({
-              gameId: game.id,
-              playerId: pid,
-              status: "invited",
-            }));
-          if (payload.length > 0) {
+          const accountPlayers = selectedCandidates.filter((p) => !p.isOffline);
+          const toCreate = accountPlayers
+            .filter((p) => !p.rosterEntry)
+            .map((p) => ({ gameId: game.id, playerId: p.id, status: "invited" }));
+          const toReinvite = accountPlayers.filter((p) => p.rosterEntry);
+
+          if (toCreate.length > 0) {
             const data = await apiFetch("/rosters/batch", {
               method: "POST",
-              body: payload,
+              body: toCreate,
             });
             setRosters((prev) => [...prev, ...(data as any[]).map(mapRoster)]);
-            // Notify each invited player
-            const gameLabel = `${game.sport} @ ${game.location}`;
-            payload.forEach(({ playerId }) =>
-              sendAppNotification(
-                playerId,
-                `🏅 比赛邀请 / Game Invitation`,
-                `${currentUser.name} invited you to play "${gameLabel}" on ${new Date(game.time).toLocaleString()}.`,
-              ),
+          }
+
+          for (const p of toReinvite) {
+            const updated = await apiFetch(`/rosters/${p.rosterEntry!.id}/status`, {
+              method: "PUT",
+              body: { status: "invited" },
+            });
+            setRosters((prev) =>
+              prev.map((r) => (r.id === p.rosterEntry!.id ? mapRoster(updated) : r)),
             );
           }
+
+          const gameLabel = `${game.sport} @ ${game.location}`;
+          accountPlayers.forEach(({ id }) => {
+            sendAppNotification(
+              id,
+              `\ud83c\udfc5 ${t("notifGameInvitationTitle")}`,
+              t("notifBodyGameInvitation")
+                .replace("{coach}", currentUser.name)
+                .replace("{gameLabel}", gameLabel)
+                .replace("{time}", new Date(game.time).toLocaleString()),
+            );
+          });
+
+          selectedCandidates
+            .filter((p) => p.isOffline)
+            .forEach((p) => setOfflineStatus(p.id, "waiting"));
+
           setModal(null);
           showToast(t("invitationsSent"));
         } catch (err: any) {
           showToast("Failed: " + err.message);
         }
       };
+
       return (
         <View style={{ gap: 12 }}>
-          <Text style={s.label}>{t("selectGroupLabel")}</Text>
-          {myGroups.length === 0 ? (
-            <Text style={s.hintText}>{t("noGroupsCreateFirst")}</Text>
-          ) : matchingGroups.length === 0 ? (
-            <Text style={s.hintText}>{t("noMatchingGroupsForGame")}</Text>
+          {fixedGroup ? (
+            <View style={s.infoBox}>
+              <Text style={s.hintText}>
+                {t("teamLabel")}: {fixedGroup.name}
+              </Text>
+            </View>
           ) : (
-            matchingGroups.map((g) => (
-              <TouchableOpacity
-                key={g.id}
-                style={[
-                  s.groupSelectRow,
-                  selectedGroupId === g.id && s.groupSelectActive,
-                ]}
-                onPress={() => setSelectedGroupId(g.id)}
-              >
-                <Text
-                  style={{
-                    color: selectedGroupId === g.id ? C.blue : C.slate700,
-                  }}
-                >
-                  {g.name}
-                </Text>
-                {selectedGroupId === g.id && <Check size={14} color={C.blue} />}
-              </TouchableOpacity>
-            ))
+            <>
+              <Text style={s.label}>{t("selectGroupLabel")}</Text>
+              {myGroups.length === 0 ? (
+                <Text style={s.hintText}>{t("noGroupsCreateFirst")}</Text>
+              ) : matchingGroups.length === 0 ? (
+                <Text style={s.hintText}>{t("noMatchingGroupsForGame")}</Text>
+              ) : (
+                matchingGroups.map((g) => (
+                  <TouchableOpacity
+                    key={g.id}
+                    style={[
+                      s.groupSelectRow,
+                      selectedGroupId === g.id && s.groupSelectActive,
+                    ]}
+                    onPress={() => setSelectedGroupId(g.id)}
+                  >
+                    <Text
+                      style={{
+                        color: selectedGroupId === g.id ? C.blue : C.slate700,
+                      }}
+                    >
+                      {g.name}
+                    </Text>
+                    {selectedGroupId === g.id && <Check size={14} color={C.blue} />}
+                  </TouchableOpacity>
+                ))
+              )}
+            </>
           )}
+
+          {!!selectedGroup && (
+            <View style={s.participationColumnsWrap}>
+              <View style={s.participatingColumn}>
+                <Text style={[s.rosterSectionLabel, { color: C.green }]}>
+                  {t("participatingLabel")}
+                </Text>
+                {selectedCandidates.length === 0 ? (
+                  <Text style={s.hintText}>{t("noneLabel")}</Text>
+                ) : (
+                  selectedCandidates.map((p) => (
+                    <View key={p.id} style={s.participationRow}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text
+                          style={{
+                            fontWeight: "600",
+                            color: p.isOffline ? C.slate700 : C.slate800,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {p.name}
+                        </Text>
+                        {p.isOffline && (
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            {t("offlineNoAccountLabel")}
+                          </Text>
+                        )}
+                      </View>
+                      <TouchableOpacity
+                        style={s.iconBtnSm}
+                        onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                      >
+                        <Pencil size={13} color={C.slate600} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.participationBtn, s.toNonParticipatingBtn]}
+                        onPress={() => moveToOut(p.id)}
+                      >
+                        <Text style={s.participationActionText}>Out</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              <View style={s.nonParticipatingColumn}>
+                <Text style={[s.rosterSectionLabel, { color: C.slate700 }]}>Out</Text>
+                {outCandidates.length === 0 ? (
+                  <Text style={s.hintText}>{t("noneLabel")}</Text>
+                ) : (
+                  outCandidates.map((p) => (
+                    <View key={p.id} style={s.participationRow}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text
+                          style={{
+                            fontWeight: "600",
+                            color: p.isOffline ? C.slate700 : C.slate800,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {p.name}
+                        </Text>
+                        {p.isOffline && (
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            {t("offlineNoAccountLabel")}
+                          </Text>
+                        )}
+                      </View>
+                      <TouchableOpacity
+                        style={s.iconBtnSm}
+                        onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                      >
+                        <Pencil size={13} color={C.slate600} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.participationBtn, s.toParticipatingBtn]}
+                        onPress={() => moveToInvite(p.id)}
+                      >
+                        <Text style={s.participationActionText}>{t("participateBtn")}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
+            </View>
+          )}
+
           <TouchableOpacity
-            style={[s.btn, !selectedGroupId && s.btnDisabled]}
+            style={[
+              s.btn,
+              (!selectedGroup || selectedCandidates.length === 0) && s.btnDisabled,
+            ]}
             onPress={send}
-            disabled={!selectedGroupId}
+            disabled={!selectedGroup || selectedCandidates.length === 0}
           >
             <Text style={s.btnText}>{t("sendInvitationsBtn")}</Text>
           </TouchableOpacity>
         </View>
       );
     };
+
+    const inviteTitle = hasRosterColumns ? t("inviteMoreBtn") : t("invitePlayersTitle");
     setModal({
-      title: t("invitePlayersTitle"),
+      title: inviteTitle,
       content: <ModalContent />,
     });
   };
 
   return (
     <View style={s.card}>
-      {/* Header — tap to expand/collapse */}
       <TouchableOpacity
         style={[
           s.rowBetween,
@@ -4280,28 +5619,63 @@ function GameManagementCard({
             marginBottom: 10,
           },
         ]}
-        onPress={() => setExpanded((v) => !v)}
+        onPress={() => onToggleExpand(!expanded)}
         activeOpacity={0.7}
       >
         <View style={{ flex: 1 }}>
           <Text style={s.cardTitle}>
-            {sportEmoji(game.sport)}{" "}
-            {displayClub ? displayClub.name : (homeCoach?.name ?? game.sport)} ·{" "}
-            {game.ageGroup} ({fmtDate(game.time)})
+            {game.status === "locked"
+              ? `${sportEmoji(game.sport)} VS ${opponentGroup?.name ?? opponentCoach?.name ?? t("pendingLabel")} - ${game.ageGroup} (${titleTimeText})`
+              : `${sportEmoji(game.sport)} ${displayClub ? (homeGroup ? `${displayClub.name} - ${homeGroup.name}` : displayClub.name) : (homeGroup?.name ?? homeCoach?.name ?? game.sport)} - ${game.ageGroup} (${titleTimeText})`}
           </Text>
+          <View style={s.cardMetaRow}>
+            <View
+              style={[
+                s.venueChip,
+                isHomeForCurrentCoach ? s.venueChipHome : s.venueChipAway,
+              ]}
+            >
+              <Text style={s.venueChipText}>{venueRole}</Text>
+            </View>
+            <Text
+              style={s.cardMetaText}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {`${t("awayTeamLabel")}: ${opponentDisplay}`}
+            </Text>
+          </View>
           {!expanded && (
             <Text style={{ fontSize: 12, color: C.slate500, marginTop: 2 }}>
-              {fmtDateTime(game.time)} · {game.ageGroup}
+              {fmtDateTime(game.time)}
             </Text>
           )}
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {game.creatorId === currentUser.id && pendingOpponents.length > 0 && (
+            <View
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: C.red,
+              }}
+            />
+          )}
           {expanded && game.creatorId === currentUser.id && (
             <TouchableOpacity
               onPress={openEditGameModal}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Pencil size={16} color={C.blue} />
+            </TouchableOpacity>
+          )}
+          {expanded && game.status === "locked" && (
+            <TouchableOpacity
+              onPress={openCancelGameModal}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <X size={16} color={C.red} />
             </TouchableOpacity>
           )}
           {expanded &&
@@ -4315,67 +5689,17 @@ function GameManagementCard({
               </TouchableOpacity>
             )}
           <Text style={{ color: C.slate400, fontSize: 14 }}>
-            {expanded ? "▲" : "▼"}
+            {expanded ? "\u25b2" : "\u25bc"}
           </Text>
         </View>
       </TouchableOpacity>
 
       {expanded && (
         <>
-          {/* Info */}
           <View style={s.infoBox}>
             <InfoRow label={t("homeTeamLabel")} value={homeTeamDisplay} />
             <InfoRow label={t("awayTeamLabel")} value={awayTeamDisplay} />
-            {opponentCoach && (
-              <>
-                <InfoRow
-                  label={t("opponentCoachLabel")}
-                  value={opponentCoach.name}
-                />
-                <View style={s.rowBetween}>
-                  <Text style={s.infoLabel}>
-                    {t("opponentCoachEmailLabel")}
-                  </Text>
-                  <TouchableOpacity
-                    style={s.valueLinkWrap}
-                    onPress={() =>
-                      Linking.openURL(`mailto:${opponentCoach.email}`)
-                    }
-                  >
-                    <Text style={[s.infoValue, { color: C.blue }]}>
-                      {opponentCoach.email}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-                {opponentCoach.phone && (
-                  <View style={s.rowBetween}>
-                    <Text style={s.infoLabel}>
-                      {t("opponentCoachPhoneLabel")}
-                    </Text>
-                    <TouchableOpacity
-                      style={s.valueLinkWrap}
-                      onPress={() =>
-                        Linking.openURL(`tel:${opponentCoach.phone}`)
-                      }
-                    >
-                      <Text style={[s.infoValue, { color: C.green }]}>
-                        {opponentCoach.phone}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {opponentGroup && (
-                  <InfoRow
-                    label={t("opponentGroupLabel")}
-                    value={opponentGroup.name}
-                  />
-                )}
-              </>
-            )}
-            <InfoRow
-              label={t("timeInfoLabel")}
-              value={fmtDateTime(game.time)}
-            />
+            <InfoRow label={t("matchVenueLabel")} value={venueRole} />
             <View style={s.rowBetween}>
               <Text style={s.infoLabel}>{t("locationInfoLabel")}</Text>
               <TouchableOpacity
@@ -4386,11 +5710,47 @@ function GameManagementCard({
                   )
                 }
               >
-                <Text style={[s.infoValue, { color: C.blue }]}>
-                  {game.location}
-                </Text>
+                <Text style={[s.infoValue, { color: C.blue }]}>{game.location}</Text>
               </TouchableOpacity>
             </View>
+            {opponentCoach && (
+              <>
+                <InfoRow
+                  label={t("opponentCoachLabel")}
+                  value={opponentCoach.name}
+                />
+                <View style={s.rowBetween}>
+                  <Text style={s.infoLabel}>{t("opponentCoachEmailLabel")}</Text>
+                  <TouchableOpacity
+                    style={s.valueLinkWrap}
+                    onPress={() => Linking.openURL(`mailto:${opponentCoach.email}`)}
+                  >
+                    <Text style={[s.infoValue, { color: C.blue }]}>
+                      {opponentCoach.email}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {opponentCoach.phone && (
+                  <View style={s.rowBetween}>
+                    <Text style={s.infoLabel}>{t("opponentCoachPhoneLabel")}</Text>
+                    <TouchableOpacity
+                      style={s.valueLinkWrap}
+                      onPress={() => Linking.openURL(`tel:${opponentCoach.phone}`)}
+                    >
+                      <Text style={[s.infoValue, { color: C.green }]}>
+                        {opponentCoach.phone}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {opponentGroup && (
+                  <InfoRow
+                    label={t("opponentGroupLabel")}
+                    value={opponentGroupClub?.name ? `${opponentGroupClub.name} - ${opponentGroup.name}` : opponentGroup.name}
+                  />
+                )}
+              </>
+            )}
             {!!game.contactPhone && game.status !== "locked" && (
               <View style={s.rowBetween}>
                 <Text style={s.infoLabel}>{t("contactPhoneInfoLabel")}</Text>
@@ -4404,27 +5764,48 @@ function GameManagementCard({
                 </TouchableOpacity>
               </View>
             )}
-            <InfoRow label={t("ageGroupInfoLabel")} value={game.ageGroup} />
-            {game.gender && (
-              <View style={s.rowBetween}>
-                <Text style={s.infoLabel}>{t("genderInfoLabel")}</Text>
-                <Text
-                  style={[
-                    s.infoValue,
-                    { color: genderColor(game.gender), fontWeight: "600" },
-                  ]}
-                >
-                  {game.gender === "male"
-                    ? "♂ "
-                    : game.gender === "female"
-                      ? "♀ "
-                      : "⚥ "}
-                  {t(
-                    `gender${game.gender.charAt(0).toUpperCase() + game.gender.slice(1)}` as any,
-                  )}
+
+            <View style={{ marginTop: 6 }}>
+              <TouchableOpacity
+                style={s.rowBetween}
+                onPress={() => setAgeGenderExpanded((v) => !v)}
+                activeOpacity={0.7}
+              >
+                <Text style={s.infoLabel}>{t("ageGenderInfoLabel")}</Text>
+                <Text style={{ color: C.slate400, fontSize: 12 }}>
+                  {ageGenderExpanded ? "\u25b2" : "\u25bc"}
                 </Text>
-              </View>
-            )}
+              </TouchableOpacity>
+              {ageGenderExpanded && (
+                <View style={{ marginTop: 4, alignItems: "flex-end", gap: 2 }}>
+                  <Text style={[s.infoValue, { textAlign: "right" }]}>
+                    {game.ageGroup}
+                  </Text>
+                  {!!game.gender && (
+                    <Text
+                      style={[
+                        s.infoValue,
+                        {
+                          textAlign: "right",
+                          color: genderColor(game.gender),
+                          fontWeight: "600",
+                        },
+                      ]}
+                    >
+                      {game.gender === "male"
+                        ? "\u2642 "
+                        : game.gender === "female"
+                          ? "\u2640 "
+                          : "\u26a5 "}
+                      {t(
+                        `gender${game.gender.charAt(0).toUpperCase() + game.gender.slice(1)}` as any,
+                      )}
+                    </Text>
+                  )}
+                </View>
+              )}
+            </View>
+
             <View style={s.rowBetween}>
               <Text style={s.infoLabel}>{t("statusInfoLabel")}</Text>
               <View
@@ -4443,16 +5824,17 @@ function GameManagementCard({
                 </Text>
               </View>
             </View>
-            <InfoRow label={t("volunteersInfoLabel")} value={volunteerNames} />
+
             {game.isPrivate && game.gameInviteCode && (
               <View
                 style={{
+                  position: "relative",
                   flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
+                  alignItems: "flex-start",
                   marginTop: 6,
                   paddingVertical: 6,
                   paddingHorizontal: 10,
+                  paddingRight: 78,
                   backgroundColor: "#eff6ff",
                   borderRadius: 8,
                   borderWidth: 1,
@@ -4460,13 +5842,26 @@ function GameManagementCard({
                 }}
               >
                 <View
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    flex: 1,
+                    minWidth: 0,
+                    paddingRight: 8,
+                  }}
                 >
                   <Key size={13} color={C.blue} />
                   <Text
-                    style={{ fontSize: 12, color: C.blue, fontWeight: "600" }}
+                    style={{
+                      fontSize: 12,
+                      color: C.blue,
+                      fontWeight: "600",
+                      flexShrink: 1,
+                      flexWrap: "wrap",
+                    }}
                   >
-                    私密 · 邀请码：{game.gameInviteCode}
+                    {`${t("privateGameInviteCodeLabel")} ${game.gameInviteCode}`}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -4476,20 +5871,23 @@ function GameManagementCard({
                     showToast(t("copied"));
                   }}
                   style={{
+                    position: "absolute",
+                    right: 10,
+                    top: 8,
                     paddingHorizontal: 8,
                     paddingVertical: 3,
                     backgroundColor: C.blue,
                     borderRadius: 5,
+                    alignItems: "flex-start",
                   }}
                 >
-                  <Text
-                    style={{ fontSize: 11, color: C.white, fontWeight: "600" }}
-                  >
+                  <Text style={{ fontSize: 11, color: C.white, fontWeight: "600" }}>
                     {t("copy")}
                   </Text>
                 </TouchableOpacity>
               </View>
             )}
+
             {!!game.description && (
               <View
                 style={{
@@ -4499,13 +5897,23 @@ function GameManagementCard({
                   borderColor: C.slate200,
                 }}
               >
-                <Text style={s.infoLabel}>{t("detailsInfoLabel")}</Text>
-                <Text style={s.hintText}>{game.description}</Text>
+                <TouchableOpacity
+                  style={s.rowBetween}
+                  onPress={() => setDescriptionExpanded((v) => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={s.infoLabel}>{t("detailsInfoLabel")}</Text>
+                  <Text style={{ color: C.slate400, fontSize: 12 }}>
+                    {descriptionExpanded ? "\u25b2" : "\u25bc"}
+                  </Text>
+                </TouchableOpacity>
+                {descriptionExpanded && (
+                  <Text style={[s.hintText, { marginTop: 4 }]}>{game.description}</Text>
+                )}
               </View>
             )}
           </View>
 
-          {/* Pending opponents */}
           {game.creatorId === currentUser.id &&
             game.status === "open" &&
             pendingOpponents.length > 0 && (
@@ -4522,10 +5930,10 @@ function GameManagementCard({
                     ? clubs.find((c) => c.id === applicantGroup.clubId)
                     : null;
                   const applicantGroupDisplay = applicantGroup
-                    ? `${applicantClub?.name ?? "—"} · ${applicantGroup.name}`
-                    : "—";
+                    ? `${applicantClub?.name ?? "\u2014"} \u00b7 ${applicantGroup.name}`
+                    : "\u2014";
                   const applicantMeta =
-                    `${formatAgeGroupLabel(applicantGroup?.ageGroup) || "—"} · ` +
+                    `${formatAgeGroupLabel(applicantGroup?.ageGroup) || "\u2014"} \u00b7 ` +
                     (applicantGroup?.gender
                       ? t(
                           `gender${
@@ -4533,22 +5941,22 @@ function GameManagementCard({
                             applicantGroup.gender.slice(1)
                           }` as any,
                         )
-                      : "—");
+                      : "\u2014");
                   return (
                     <View key={app.id} style={s.pendingRow}>
                       <View style={{ flex: 1, gap: 4 }}>
                         <Text style={{ color: C.blue, fontWeight: "600" }}>
-                          {opp?.name ?? "—"}
+                          {applicantGroupDisplay}
                         </Text>
                         <Text style={s.pendingMetaText}>
-                          {t("teamLabel")}: {applicantGroupDisplay}
+                          {t("opponentCoachLabel")}: {opp?.name ?? "\u2014"}
                         </Text>
                         <Text style={s.pendingMetaText}>{applicantMeta}</Text>
                         <Text style={s.pendingMetaText}>
-                          {t("labelEmail")}: {opp?.email ?? "—"}
+                          {t("labelEmail")}: {opp?.email ?? "\u2014"}
                         </Text>
                         <Text style={s.pendingMetaText}>
-                          {t("labelPhone")}: {opp?.phone ?? "—"}
+                          {t("labelPhone")}: {opp?.phone ?? "\u2014"}
                         </Text>
                       </View>
                       <View style={s.pendingActions}>
@@ -4587,187 +5995,233 @@ function GameManagementCard({
               </View>
             )}
 
-          {/* Roster */}
           <View style={{ marginTop: 12 }}>
             <View style={s.rowBetween}>
               <Text style={[s.label, { flexDirection: "row" }]}>
                 {t("rosterManagementLabel")}
               </Text>
-              {/* Invite players manually only available after game is locked */}
               {game.status === "locked" && (
-                <TouchableOpacity onPress={openInviteModal}>
-                  <Text
-                    style={{ color: C.blue, fontSize: 13, fontWeight: "500" }}
-                  >
-                    {t("invitePlayersBtn")}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                  <TouchableOpacity onPress={openInviteModal}>
+                    <Text style={{ color: C.blue, fontSize: 13, fontWeight: "500" }}>
+                      {hasRosterColumns ? t("inviteMoreBtn") : t("invitePlayersBtn")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
 
-            <View style={s.participationColumnsWrap}>
-              <View style={s.participatingColumn}>
-                <Text style={[s.rosterSectionLabel, { color: C.green }]}>
-                  {t("participatingCountLabel").replace(
-                    "{count}",
-                    String(
-                      participatingPlayers.length +
-                        locallyParticipatingOffline.length,
-                    ),
-                  )}
-                </Text>
-                {participatingPlayers.map((p) => {
-                  const playerName =
-                    users.find((u) => u.id === p.playerId)?.name ||
-                    offlinePlayersById.get(p.playerId) ||
-                    "-";
-                  return (
-                    <View key={p.id} style={s.participationRow}>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text
-                          style={{ fontWeight: "600", color: C.slate800 }}
-                          numberOfLines={1}
-                        >
-                          {playerName}
-                        </Text>
-                        {p.status === "pending_coach" && (
-                          <Text style={{ fontSize: 10, color: "#c2410c" }}>
-                            {t("pendingCoachLabel")}
-                          </Text>
-                        )}
-                        {p.status === "pending_guardian" && (
-                          <Text style={{ fontSize: 10, color: "#c2410c" }}>
-                            {t("pendingGuardianLabel")}
-                          </Text>
-                        )}
-                      </View>
-                      <View style={s.participationActions}>
-                        {p.status === "pending_coach" && (
-                          <TouchableOpacity
-                            style={s.approveBtn}
-                            onPress={() => handleApprovePlayer(p)}
-                          >
-                            <Text style={s.participationActionText}>
-                              {t("approveBtn")}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                          style={[s.participationBtn, s.toNonParticipatingBtn]}
-                          onPress={() =>
-                            handleSetParticipation(p, "not_participating")
-                          }
-                        >
-                          <Text style={s.participationActionText}>
-                            {t("setNotParticipatingBtn")}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-                {locallyParticipatingOffline.map((p) => (
-                  <View key={p.id} style={s.participationRow}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
-                        style={{ fontWeight: "600", color: C.slate800 }}
-                        numberOfLines={1}
-                      >
-                        {p.name}
-                      </Text>
-                      <Text style={{ fontSize: 10, color: C.slate500 }}>
-                        {t("offlineDefaultParticipating")}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[s.participationBtn, s.toNonParticipatingBtn]}
-                      onPress={() =>
-                        handleSetOfflineParticipation(p.id, "not_participating")
-                      }
-                    >
-                      <Text style={s.participationActionText}>
-                        {t("setNotParticipatingBtn")}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
+            {game.status === "locked" && (
+              <TouchableOpacity
+                style={s.calendarActionRow}
+                onPress={handleAddGameToCalendar}
+                activeOpacity={0.85}
+              >
+                <Text style={s.calendarActionText}>{t("addToCalendarBtn")}</Text>
+              </TouchableOpacity>
+            )}
 
-              <View style={s.nonParticipatingColumn}>
-                <Text style={[s.rosterSectionLabel, { color: C.red }]}>
-                  {t("notParticipatingCountLabel").replace(
-                    "{count}",
-                    String(
-                      nonParticipatingPlayers.length +
-                        locallyNotParticipatingOffline.length,
-                    ),
-                  )}
-                </Text>
-                {nonParticipatingPlayers.map((p) => {
-                  const playerName =
-                    users.find((u) => u.id === p.playerId)?.name ||
-                    offlinePlayersById.get(p.playerId) ||
-                    "-";
-                  const locked = p.status === "withdrawn";
-                  return (
-                    <View
-                      key={p.id}
-                      style={[s.participationRow, locked && s.withdrawnRow]}
-                    >
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text
-                          style={{ fontWeight: "600", color: C.slate800 }}
-                          numberOfLines={1}
-                        >
-                          {playerName}
-                        </Text>
-                        {locked && (
-                          <Text style={{ fontSize: 10, color: C.red }}>
-                            {t("withdrawnLockedReasonPrefix")}
-                            {p.withdrawReason || t("noReasonFallback")}
+            {hasRosterColumns && (
+              <View style={s.participationColumnsWrap}>
+                <View style={s.participatingColumn}>
+                  <Text style={[s.rosterSectionLabel, { color: C.green }]}>
+                    {t("confirmedParticipationCount").replace(
+                      "{count}",
+                      String(
+                        participatingPlayers.length +
+                          participatingOfflinePlayers.length,
+                      ),
+                    )}
+                  </Text>
+
+                  {participatingPlayers.map((p) => {
+                    const basePlayerName =
+                      users.find((u) => u.id === p.playerId)?.name ||
+                      offlinePlayersById.get(p.playerId) ||
+                      "-";
+                    const playerName =
+                      getCoachPlayerDisplayName(
+                        coachPlayerNotes,
+                        currentUser.id,
+                        p.playerId,
+                        basePlayerName,
+                      );
+                    return (
+                      <View key={p.id} style={s.participationRow}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ fontWeight: "600", color: C.slate700 }}>
+                            {playerName}
                           </Text>
-                        )}
+                          {p.status === "pending_coach" && (
+                            <Text style={{ fontSize: 10, color: "#c2410c" }}>
+                              {t("pendingCoachLabel")}
+                            </Text>
+                          )}
+                          {p.status === "pending_guardian" && (
+                            <Text style={{ fontSize: 10, color: "#c2410c" }}>
+                              {t("pendingGuardianLabel")}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={s.participationActions}>
+                          <TouchableOpacity
+                            style={s.iconBtnSm}
+                            onPress={() =>
+                              openEditPlayerNicknameModal(p.playerId, basePlayerName)
+                            }
+                          >
+                            <Pencil size={13} color={C.slate600} />
+                          </TouchableOpacity>
+                          {p.status === "pending_coach" && (
+                            <TouchableOpacity
+                              style={s.approveBtn}
+                              onPress={() => handleApprovePlayer(p)}
+                            >
+                              <Text style={s.participationActionText}>
+                                {t("approveBtn")}
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity
+                            style={[s.participationBtn, s.toNonParticipatingBtn]}
+                            onPress={() => handleSetParticipation(p, "not_participating")}
+                          >
+                            <Text style={s.participationActionText}>Out</Text>
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                      {!locked && (
-                        <TouchableOpacity
-                          style={[s.participationBtn, s.toParticipatingBtn]}
-                          onPress={() => handleSetParticipation(p, "approved")}
-                        >
-                          <Text style={s.participationActionText}>
-                            {t("setParticipatingBtn")}
+                    );
+                  })}
+
+                  {participatingOfflinePlayers.map((p) => {
+                    const playerName = getCoachPlayerDisplayName(
+                      coachPlayerNotes,
+                      currentUser.id,
+                      p.id,
+                      p.name,
+                    );
+                    return (
+                      <View key={p.id} style={s.participationRow}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ fontWeight: "600", color: C.slate700 }}>
+                            {playerName}
                           </Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                })}
-                {locallyNotParticipatingOffline.map((p) => (
-                  <View key={p.id} style={s.participationRow}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
-                        style={{ fontWeight: "600", color: C.slate800 }}
-                        numberOfLines={1}
-                      >
-                        {p.name}
-                      </Text>
-                      <Text style={{ fontSize: 10, color: C.slate500 }}>
-                        {t("offlineDefaultParticipating")}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[s.participationBtn, s.toParticipatingBtn]}
-                      onPress={() =>
-                        handleSetOfflineParticipation(p.id, "approved")
-                      }
-                    >
-                      <Text style={s.participationActionText}>
-                        {t("setParticipatingBtn")}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            {t("offlineNoAccountLabel")}
+                          </Text>
+                        </View>
+                        <View style={s.participationActions}>
+                          <TouchableOpacity
+                            style={s.iconBtnSm}
+                            onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                          >
+                            <Pencil size={13} color={C.slate600} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[s.participationBtn, s.toNonParticipatingBtn]}
+                            onPress={() => setOfflineStatus(p.id, "out")}
+                          >
+                            <Text style={s.participationActionText}>Out</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <View style={s.waitingColumn}>
+                  <Text style={[s.rosterSectionLabel, { color: "#a16207" }]}>
+                    {t("waitingConfirmationCount").replace(
+                      "{count}",
+                      String(
+                        waitingConfirmationPlayers.length +
+                          waitingOfflinePlayers.length,
+                      ),
+                    )}
+                  </Text>
+
+                  {waitingConfirmationPlayers.map((p) => {
+                    const basePlayerName =
+                      users.find((u) => u.id === p.playerId)?.name ||
+                      offlinePlayersById.get(p.playerId) ||
+                      "-";
+                    const playerName =
+                      getCoachPlayerDisplayName(
+                        coachPlayerNotes,
+                        currentUser.id,
+                        p.playerId,
+                        basePlayerName,
+                      );
+                    return (
+                      <View key={p.id} style={s.participationRow}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ fontWeight: "600", color: C.slate800 }}>
+                            {playerName}
+                          </Text>
+                        </View>
+                        <View style={s.participationActions}>
+                          <TouchableOpacity
+                            style={s.iconBtnSm}
+                            onPress={() =>
+                              openEditPlayerNicknameModal(p.playerId, basePlayerName)
+                            }
+                          >
+                            <Pencil size={13} color={C.slate600} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[s.participationBtn, s.toNonParticipatingBtn]}
+                            onPress={() => handleSetParticipation(p, "not_participating")}
+                          >
+                            <Text style={s.participationActionText}>Out</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+
+                  {waitingOfflinePlayers.map((p) => {
+                    const playerName = getCoachPlayerDisplayName(
+                      coachPlayerNotes,
+                      currentUser.id,
+                      p.id,
+                      p.name,
+                    );
+                    return (
+                      <View key={p.id} style={s.participationRow}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={{ fontWeight: "600", color: C.slate800 }}>
+                            {playerName}
+                          </Text>
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            {t("offlineNoAccountLabel")}
+                          </Text>
+                        </View>
+                        <View style={s.participationActions}>
+                          <TouchableOpacity
+                            style={s.iconBtnSm}
+                            onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                          >
+                            <Pencil size={13} color={C.slate600} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[s.participationBtn, s.toParticipatingBtn]}
+                            onPress={() => setOfflineStatus(p.id, "participating")}
+                          >
+                            <Text style={s.participationActionText}>{t("participateBtn")}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[s.participationBtn, s.toNonParticipatingBtn]}
+                            onPress={() => setOfflineStatus(p.id, "out")}
+                          >
+                            <Text style={s.participationActionText}>Out</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
               </View>
-            </View>
+            )}
           </View>
         </>
       )}
@@ -4802,7 +6256,6 @@ function FieldInput({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={C.slate400}
-        multiline={multiline}
       />
     </View>
   );
@@ -4844,6 +6297,37 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   cardTitle: { fontSize: 16, fontWeight: "bold", color: C.slate800, flex: 1 },
+  cardMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  cardMetaText: {
+    fontSize: 12,
+    color: C.slate600,
+    flex: 1,
+  },
+  venueChip: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+  },
+  venueChipHome: {
+    backgroundColor: "#dbeafe",
+    borderColor: "#93c5fd",
+  },
+  venueChipAway: {
+    backgroundColor: "#fef3c7",
+    borderColor: "#fcd34d",
+  },
+  venueChipText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: C.slate700,
+    letterSpacing: 0.3,
+  },
   statusBadge: {
     backgroundColor: "#dcfce7",
     borderRadius: 20,
@@ -5115,6 +6599,37 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#fed7aa",
   },
+  occurrenceBanner: {
+    backgroundColor: "#fff1f2",
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+    borderRadius: 14,
+    padding: 12,
+    gap: 10,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  occurrenceBannerTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.red,
+  },
+  occurrenceBannerBody: {
+    fontSize: 12,
+    color: C.slate600,
+  },
+  occurrenceBannerCard: {
+    backgroundColor: C.white,
+    borderWidth: 1,
+    borderColor: "#fecdd3",
+    borderRadius: 12,
+    padding: 12,
+  },
+  occurrenceBannerGameTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: C.slate800,
+  },
   pendingRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -5172,6 +6687,15 @@ const s = StyleSheet.create({
     padding: 8,
     gap: 6,
   },
+  waitingColumn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    backgroundColor: "#fef9c3",
+    borderRadius: 10,
+    padding: 8,
+    gap: 6,
+  },
   participationRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -5184,21 +6708,24 @@ const s = StyleSheet.create({
     borderColor: C.slate200,
   },
   participationActions: {
+    flexDirection: "column",
     gap: 6,
+    justifyContent: "flex-start",
     flexShrink: 0,
-    alignItems: "flex-end",
+    alignItems: "stretch",
   },
   participationBtn: {
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    alignSelf: "flex-end",
+    alignSelf: "stretch",
+    alignItems: "center",
   },
   toNonParticipatingBtn: {
-    backgroundColor: C.red,
+    backgroundColor: "#0044ff",
   },
   toParticipatingBtn: {
-    backgroundColor: C.green,
+    backgroundColor: "#0044ff",
   },
   participationActionText: {
     color: C.white,
@@ -5221,6 +6748,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 8,
+    alignItems: "center",
   },
   rosterSectionLabel: {
     fontSize: 10,
@@ -5265,5 +6793,54 @@ const s = StyleSheet.create({
     backgroundColor: C.white,
   },
   dateBtnText: { fontSize: 13, color: C.slate800, fontWeight: "500" },
+  calendarActionRow: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+    backgroundColor: "#f0fdf4",
+    borderRadius: 10,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  calendarActionText: {
+    color: C.green,
+    fontSize: 13,
+    fontWeight: "600",
+  },
   spinner: { height: 120, marginTop: -4 },
+  historyFloatingBtn: {
+    position: "absolute",
+    right: 16,
+    bottom: 118,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.blue,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 20,
+  },
+  historyFloatingBtnText: {
+    color: C.white,
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  historyCard: {
+    backgroundColor: C.slate50,
+    borderWidth: 1,
+    borderColor: C.slate200,
+    borderRadius: 12,
+    padding: 12,
+    gap: 6,
+  },
+  historyTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.slate800,
+  },
 });

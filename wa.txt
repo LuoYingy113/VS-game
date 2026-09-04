@@ -1,0 +1,50 @@
+C:\Users\xieziye/.ssh/id_ed25519
+    ssh -i /Users/xieziye/.ssh/id_ed25519 ubuntu@135.125.134.199
+(venv) (base) ubuntu@6321a088-3770-4e3d-a84a-a2e9330d44c6-0:~$ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+$env:EAS_NO_VCS=1
+eas build --platform ios
+eas submit -p ios
+eas build --platform android --profile preview
+source venv/bin/activate
+
+ ssh -i /Users/xieziye/.ssh/id_ed25519 ubuntu@135.125.134.199
+source venv/bin/activate
+fuser -k 8000/tcp 
+nohup uvicorn main:app --host 0.0.0.0 --port 8000 & echo $! > /tmp/team-matcher.pid
+nohup uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4 --timeout-keep-alive 5 --log-level info > /tmp/team-matcher.log 2>&1 & echo $! > /tmp/team-matcher.pid
+
+psql -U postgres -d team_matcher_db -c "
+UPDATE users SET password = '1234' WHERE email = 'tremaximus@hotmail.com';
+"
+SELECT * FROM users;
+
+
+for i in $(seq 1 20); do
+  curl -s -o /dev/null -w "code:%{http_code} ttfb:%{time_starttransfer}s total:%{time_total}s\n" \
+  "http://127.0.0.1:8000/api/send_password_reset_code";
+done
+seq 1 40 | xargs -I{} -P 2 sh -c 'curl -s -o /dev/null -w "total:%{time_total}s code:%{http_code}\n" "http://127.0.0.1:8000/api/send_password_reset_code"'
+
+
+  pid   | usename  | state  | wait_event_type | wait_event |   running_for   |                          query           
+--------+----------+--------+-----------------+------------+-----------------+----------------------------------------------------------
+ 815468 | postgres | idle   | Client          | ClientRead | 00:19:34.310855 | ROLLBACK
+ 815472 | postgres | idle   | Client          | ClientRead | 00:19:34.28567  | ROLLBACK
+ 815469 | postgres | idle   | Client          | ClientRead | 00:19:34.285333 | ROLLBACK
+ 815747 | postgres | idle   | Client          | ClientRead | 00:19:34.256476 | ROLLBACK
+ 815473 | postgres | idle   | Client          | ClientRead | 00:18:58.656884 | ROLLBACK
+ 815471 | postgres | idle   | Client          | ClientRead | 00:18:49.665731 | ROLLBACK
+ 815474 | postgres | idle   | Client          | ClientRead | 00:18:43.605875 | ROLLBACK
+ 815470 | postgres | idle   | Client          | ClientRead | 00:18:34.638818 | ROLLBACK
+ 815475 | postgres | idle   | Client          | ClientRead | 00:18:31.649164 | ROLLBACK
+ 816450 | postgres | active |                 |            | 00:00:00        |                                                         +
+        |          |        |                 |            |                 | SELECT pid, usename, state, wait_event_type, wait_event,+
+        |          |        |                 |            |                 |        now()-query_start AS running_for, query          +
+        |          |        |                 |            |                 | FROM pg_stat_activity                                   +
+        |          |        |                 |            |                 | WHERE datname='team_matcher_db'                         +
+        |          |        |                 |            |                 | ORDER BY query_start;                                   +
+        |          |        |                 |            |                 |
+(10 rows)
+
+~
+(END)

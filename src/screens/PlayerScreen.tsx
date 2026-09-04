@@ -2,36 +2,42 @@
  * 球员仪表盘 (Player Dashboard)
  * 对应 App.jsx 的 PlayerView
  */
-import { Calendar, Mail, Trophy } from "lucide-react-native";
+import { Calendar, Mail } from "lucide-react-native";
 import React, { useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Linking,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, calculateAge, mapTeamGroup } from "../api";
+import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
 import { AppModal, C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
-import { sendAppNotification } from "../storage";
+import { clearLoggedInUserId, notifI18n, sendAppNotification } from "../storage";
 import {
-    AdminSettings,
-    Club,
-    Game,
-    ModalConfig,
-    RosterEntry,
-    TeamGroup,
-    User,
+  AdminSettings,
+  Club,
+  Game,
+  ModalConfig,
+  RosterEntry,
+  TeamGroup,
+  User,
 } from "../types";
 
 interface PlayerState {
   currentUser: User;
+  setCurrentUser: React.Dispatch<React.SetStateAction<User | null>>;
+  playerProfileOpen: boolean;
+  setPlayerProfileOpen: (v: boolean) => void;
   games: Game[];
   rosters: RosterEntry[];
   setRosters: React.Dispatch<React.SetStateAction<RosterEntry[]>>;
@@ -46,6 +52,9 @@ interface PlayerState {
 export default function PlayerScreen({ state }: { state: PlayerState }) {
   const {
     currentUser,
+    setCurrentUser,
+    playerProfileOpen,
+    setPlayerProfileOpen,
     games,
     rosters,
     setRosters,
@@ -58,12 +67,12 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
   } = state;
   const { t } = useLanguage();
 
-  const [tab, setTab] = useState<"invites" | "my_games" | "confirmed">(
-    "invites",
-  );
+  const [tab, setTab] = useState<"invites" | "schedule">("invites");
   const [modal, setModal] = useState<ModalConfig | null>(null);
   const [joinInviteCode, setJoinInviteCode] = useState("");
   const [joiningTeam, setJoiningTeam] = useState(false);
+  const [joinedTeamsExpanded, setJoinedTeamsExpanded] = useState(false);
+  const autoHandledInviteIdsRef = React.useRef<Set<string>>(new Set());
 
   const myRosters = rosters.filter((r) => r.playerId === currentUser.id);
   const invites = myRosters.filter((r) => r.status === "invited");
@@ -113,7 +122,9 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
 
   const handleAcceptInvite = async (entry: RosterEntry) => {
     const newStatus =
-      age < adminSettings.underageLimit ? "pending_guardian" : "approved";
+      age < adminSettings.underageLimit && currentUser.guardianId
+        ? "pending_guardian"
+        : "approved";
     try {
       await apiFetch(`/rosters/${entry.id}/status`, {
         method: "PUT",
@@ -132,6 +143,95 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     } catch (err: any) {
       showToast("Failed: " + err.message);
     }
+  };
+
+  // Default invited players to participating by auto-confirming invite status.
+  React.useEffect(() => {
+    const pendingAutoAccept = myRosters.filter(
+      (r) => r.status === "invited" && !autoHandledInviteIdsRef.current.has(r.id),
+    );
+    if (pendingAutoAccept.length === 0) return;
+
+    pendingAutoAccept.forEach((entry) =>
+      autoHandledInviteIdsRef.current.add(entry.id),
+    );
+
+    const nextStatus =
+      age < adminSettings.underageLimit && currentUser.guardianId
+        ? "pending_guardian"
+        : "approved";
+
+    pendingAutoAccept.forEach((entry) => {
+      void (async () => {
+        try {
+          await apiFetch(`/rosters/${entry.id}/status`, {
+            method: "PUT",
+            body: { status: nextStatus },
+          });
+          setRosters((prev) =>
+            prev.map((r) =>
+              r.id === entry.id ? { ...r, status: nextStatus as any } : r,
+            ),
+          );
+        } catch {
+          // Keep silent to avoid repetitive toasts on background auto-update.
+        }
+      })();
+    });
+  }, [
+    myRosters,
+    age,
+    adminSettings.underageLimit,
+    currentUser.guardianId,
+    setRosters,
+  ]);
+
+  const handleSetNotParticipating = (entry: RosterEntry) => {
+    Alert.alert(t("setNotParticipatingBtn"), t("setNotParticipatingBtn"), [
+      { text: t("calCancel"), style: "cancel" },
+      {
+        text: t("setNotParticipatingBtn"),
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await apiFetch(`/rosters/${entry.id}/status`, {
+              method: "PUT",
+              body: { status: "not_participating" },
+            });
+            setRosters((prev) =>
+              prev.map((r) =>
+                r.id === entry.id ? { ...r, status: "not_participating" } : r,
+              ),
+            );
+
+            const game = games.find((g) => g.id === entry.gameId);
+            const gameLabel = game
+              ? `${game.sport} @ ${game.location}`
+              : "game";
+            const coachIds = new Set<string>(
+              teamGroups
+                .filter((tg) => tg.playerIds.includes(currentUser.id))
+                .map((tg) => tg.coachId),
+            );
+            if (game) coachIds.add(game.creatorId);
+            coachIds.forEach((coachId) =>
+              sendAppNotification(
+                coachId,
+                `⚠️ ${currentUser.name} ${notifI18n("notifNotParticipatingTitle")}`,
+                notifI18n("notifBodyNotParticipating", {
+                  player: currentUser.name,
+                  gameLabel,
+                }),
+              ),
+            );
+
+            showToast(t("setToNotParticipatingToast"));
+          } catch (err: any) {
+            showToast("Failed: " + err.message);
+          }
+        },
+      },
+    ]);
   };
 
   const handleWithdraw = (entry: RosterEntry) => {
@@ -168,8 +268,12 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           coachIds.forEach((coachId) =>
             sendAppNotification(
               coachId,
-              `⚠️ ${currentUser.name} 请假 / Withdrawal`,
-              `${currentUser.name} withdrew from "${gameLabel}". Reason: ${reason}`,
+              `⚠️ ${currentUser.name} ${notifI18n("notifWithdrawalTitle")}`,
+              notifI18n("notifBodyWithdrawal", {
+                player: currentUser.name,
+                gameLabel,
+                reason,
+              }),
             ),
           );
 
@@ -206,7 +310,127 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     setModal({ title: t("withdrawTitle"), content: <WithdrawContent /> });
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(t("deleteAccountTitle"), t("deleteAccountPlayerConfirm"), [
+      { text: t("calCancel"), style: "cancel" },
+      {
+        text: t("deleteAccountBtn"),
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await apiFetch(`/users/${currentUser.id}`, { method: "DELETE" });
+            showToast(t("accountDeleted"));
+            await clearLoggedInUserId();
+            setCurrentUser(null);
+          } catch (err: any) {
+            showToast("Failed: " + err.message);
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleAddGameToCalendar = async (game: Game, displayName: string) => {
+    try {
+      const result = await addMatchToSystemCalendar({
+        title: `${displayName} Match`,
+        startIso: game.time,
+        location: game.location,
+        notes: game.description || game.contactPhone || undefined,
+      });
+      showToast(`${t("calendarAdded")} (${result.calendarTitle})`);
+    } catch (err) {
+      if (err instanceof CalendarAddError) {
+        if (err.code === "permission_denied") {
+          showToast(t("calendarPermissionDenied"));
+          return;
+        }
+        if (err.code === "calendar_unavailable") {
+          showToast(t("calendarUnavailable"));
+          return;
+        }
+        if (err.code === "invalid_date") {
+          showToast(t("calendarInvalidDate"));
+          return;
+        }
+        if (err.code === "event_not_found") {
+          showToast(`${t("calendarAddFailed")}: event was not verifiable`);
+          return;
+        }
+      }
+      const unknownReason =
+        err instanceof Error && err.message ? `: ${err.message}` : "";
+      showToast(`${t("calendarAddFailed")}${unknownReason}`);
+    }
+  };
+
   const insets = useSafeAreaInsets();
+  const PlayerProfileScreen = () => (
+    <Modal
+      visible={playerProfileOpen}
+      animationType="slide"
+      onRequestClose={() => setPlayerProfileOpen(false)}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, backgroundColor: C.slate50 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <View
+          style={{
+            paddingTop: insets.top + 8,
+            paddingHorizontal: 20,
+            paddingBottom: 12,
+            backgroundColor: C.white,
+            borderBottomWidth: 1,
+            borderBottomColor: C.slate200,
+            flexDirection: "row",
+            alignItems: "center",
+          }}
+        >
+          <TouchableOpacity
+            onPress={() => setPlayerProfileOpen(false)}
+            hitSlop={12}
+            style={{ marginRight: 12 }}
+          >
+            <Text style={{ fontSize: 16, color: C.blue }}>{t("profileBack")}</Text>
+          </TouchableOpacity>
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: "700",
+              color: C.slate800,
+              flex: 1,
+            }}
+          >
+            {t("profilePersonalInfo")}
+          </Text>
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 14, paddingBottom: 60 }}>
+          <View style={s.card}>
+            <Text style={s.profileLabel}>{t("profileInfoBanner")}</Text>
+            <Text style={[s.profileValue, { marginTop: 8 }]}>{currentUser.name}</Text>
+            <Text style={s.metaText}>{currentUser.email}</Text>
+            <Text style={s.metaText}>
+              {t("ageYearsDisplay").replace("{age}", String(age))}
+            </Text>
+            {age < adminSettings.underageLimit && (
+              <View style={[s.underageBadge, { alignSelf: "flex-start", marginTop: 8 }]}>
+                <Text style={s.underageText}>{t("underageProfileBadge")}</Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[s.btn, { backgroundColor: C.red }]}
+            onPress={handleDeleteAccount}
+          >
+            <Text style={s.btnText}>{t("deleteAccountBtn")}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
 
   return (
     <KeyboardAvoidingView
@@ -220,51 +444,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "none"}
       >
-        {/* Profile banner */}
-        <View style={s.profileBanner}>
-          <View>
-            <Text style={s.profileLabel}>{t("profileInfoBanner")}</Text>
-            <Text style={s.profileValue}>
-              {t("ageYearsDisplay").replace("{age}", String(age))}
-            </Text>
-          </View>
-          {age < adminSettings.underageLimit && (
-            <View style={s.underageBadge}>
-              <Text style={s.underageText}>{t("underageProfileBadge")}</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={s.joinTeamBox}>
-          <Text style={s.joinTeamTitle}>{t("joinTeamTitle")}</Text>
-          <Text style={s.joinTeamHint}>{t("joinTeamHint")}</Text>
-          <View style={[s.searchRow, { marginTop: 8, marginBottom: 8 }]}>
-            <TextInput
-              style={s.searchInput}
-              value={joinInviteCode}
-              onChangeText={setJoinInviteCode}
-              placeholder={t("joinTeamCodePlaceholder")}
-              placeholderTextColor={C.slate400}
-              autoCapitalize="characters"
-            />
-          </View>
-          <TouchableOpacity
-            style={[s.btn, joiningTeam && s.btnDisabled]}
-            onPress={handleJoinTeamByInvite}
-            disabled={joiningTeam}
-          >
-            <Text style={s.btnText}>
-              {joiningTeam ? t("loading") : t("joinTeamBtn")}
-            </Text>
-          </TouchableOpacity>
-          <Text style={s.joinedTeamsText}>
-            {t("joinedTeamsCount").replace(
-              "{count}",
-              String(joinedTeams.length),
-            )}
-          </Text>
-        </View>
-
         {/* ===== INVITES TAB ===== */}
         {tab === "invites" && (
           <View>
@@ -339,8 +518,8 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           </View>
         )}
 
-        {/* ===== MY SCHEDULE TAB ===== */}
-        {tab === "my_games" && (
+        {/* ===== SCHEDULE TAB ===== */}
+        {tab === "schedule" && (
           <View>
             <Text style={s.sectionTitle}>{t("myScheduleLabel")}</Text>
             {activeGames.length === 0 && (
@@ -439,6 +618,21 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
                   )}
                   {ag.status === "approved" && (
                     <TouchableOpacity
+                      style={[s.btn, { marginTop: 10 }]}
+                      onPress={() =>
+                        handleAddGameToCalendar(
+                          game,
+                          displayClub
+                            ? displayClub.name
+                            : (creatorCoach?.name ?? game.sport),
+                        )
+                      }
+                    >
+                      <Text style={s.btnText}>{t("addToCalendarBtn")}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {ag.status === "approved" && (
+                    <TouchableOpacity
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
@@ -457,95 +651,92 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
                       </Text>
                     </TouchableOpacity>
                   )}
+                  {(ag.status === "approved" ||
+                    ag.status === "pending_coach" ||
+                    ag.status === "pending_guardian") && (
+                    <TouchableOpacity
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        marginTop: 8,
+                      }}
+                      onPress={() => handleSetNotParticipating(ag)}
+                    >
+                      <Text
+                        style={{
+                          color: C.red,
+                          fontSize: 13,
+                          fontWeight: "500",
+                        }}
+                      >
+                        {t("setNotParticipatingBtn")}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               );
             })}
           </View>
         )}
 
-        {/* ===== CONFIRMED TAB ===== */}
-        {tab === "confirmed" && (
-          <View>
-            <Text style={s.sectionTitle}>{t("confirmedGamesLabel")}</Text>
-            {myRosters.filter((r) => {
-              const g = games.find((gm) => gm.id === r.gameId);
-              return r.status === "approved" && g?.status === "locked";
-            }).length === 0 && (
-              <View style={s.emptyBox}>
-                <Text style={s.emptyText}>{t("noConfirmedGames")}</Text>
-              </View>
+        <View style={s.joinTeamBox}>
+          <Text style={s.joinTeamTitle}>{t("joinTeamTitle")}</Text>
+          <Text style={s.joinTeamHint}>{t("joinTeamHint")}</Text>
+          <View style={[s.searchRow, { marginTop: 8, marginBottom: 8 }]}> 
+            <TextInput
+              style={s.searchInput}
+              value={joinInviteCode}
+              onChangeText={setJoinInviteCode}
+              placeholder={t("joinTeamCodePlaceholder")}
+              placeholderTextColor={C.slate400}
+              autoCapitalize="characters"
+            />
+          </View>
+          <TouchableOpacity
+            style={[s.btn, joiningTeam && s.btnDisabled]}
+            onPress={handleJoinTeamByInvite}
+            disabled={joiningTeam}
+          >
+            <Text style={s.btnText}>
+              {joiningTeam ? t("loading") : t("joinTeamBtn")}
+            </Text>
+          </TouchableOpacity>
+          <Text style={s.joinedTeamsText}>
+            {t("joinedTeamsCount").replace(
+              "{count}",
+              String(joinedTeams.length),
             )}
-            {myRosters
-              .filter((r) => {
-                const g = games.find((gm) => gm.id === r.gameId);
-                return r.status === "approved" && g?.status === "locked";
-              })
-              .map((r) => {
-                const game = games.find((g) => g.id === r.gameId);
-                if (!game) return null;
-                const homeCoach = users.find((u) => u.id === game.creatorId);
-                const awayCoach = game.opposingTeamId
-                  ? users.find((u) => u.id === game.opposingTeamId)
-                  : null;
-                return (
-                  <View
-                    key={r.id}
-                    style={[
-                      s.card,
-                      { borderLeftWidth: 4, borderLeftColor: C.green },
-                    ]}
-                  >
-                    <Text style={s.cardTitle}>
-                      {game.sport} — {game.ageGroup}
-                    </Text>
-                    <Text style={s.metaText}>
-                      📅{" "}
-                      {new Date(game.time).toLocaleString("en-GB", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() =>
-                        Linking.openURL(
-                          `https://maps.google.com/?q=${encodeURIComponent(game.location)}`,
-                        )
-                      }
-                    >
-                      <Text style={[s.metaText, { color: "#2563eb" }]}>
-                        📍 {game.location}
-                      </Text>
-                    </TouchableOpacity>
-                    <View
-                      style={{ flexDirection: "row", gap: 8, marginTop: 6 }}
-                    >
-                      <Text style={[s.metaText, { fontWeight: "600" }]}>
-                        🏠 {homeCoach?.name ?? "—"}
-                      </Text>
-                      <Text style={s.metaText}>vs</Text>
-                      <Text style={[s.metaText, { fontWeight: "600" }]}>
-                        ✈️ {awayCoach?.name ?? "—"}
+          </Text>
+
+          <TouchableOpacity
+            style={s.joinedTeamsToggle}
+            onPress={() => setJoinedTeamsExpanded((v) => !v)}
+          >
+            <Text style={s.joinedTeamsToggleText}>
+              {joinedTeamsExpanded ? "▲" : "▼"} {t("teamLabel")}
+            </Text>
+          </TouchableOpacity>
+
+          {joinedTeamsExpanded && (
+            <View style={s.joinedTeamsList}>
+              {joinedTeams.length === 0 ? (
+                <Text style={s.hintText}>-</Text>
+              ) : (
+                joinedTeams.map((group) => {
+                  const coach = users.find((u) => u.id === group.coachId);
+                  return (
+                    <View key={group.id} style={s.joinedTeamRow}>
+                      <Text style={s.joinedTeamName}>{group.name}</Text>
+                      <Text style={s.joinedTeamCoach}>
+                        {t("coachRole")}: {coach?.name ?? "-"}
                       </Text>
                     </View>
-                    {!!game.contactPhone && (
-                      <TouchableOpacity
-                        onPress={() =>
-                          Linking.openURL(`tel:${game.contactPhone!}`)
-                        }
-                      >
-                        <Text style={[s.metaText, { color: "#16a34a" }]}>
-                          📞 {game.contactPhone}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                );
-              })}
-          </View>
-        )}
+                  );
+                })
+              )}
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       {/* Bottom nav */}
@@ -565,27 +756,17 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           icon={
             <Calendar
               size={22}
-              color={tab === "my_games" ? C.blue : C.slate400}
+              color={tab === "schedule" ? C.blue : C.slate400}
             />
           }
           label={t("myScheduleLabel")}
-          active={tab === "my_games"}
-          onPress={() => setTab("my_games")}
-        />
-        <NavBtn
-          icon={
-            <Trophy
-              size={22}
-              color={tab === "confirmed" ? C.blue : C.slate400}
-            />
-          }
-          label={t("confirmedGamesLabel")}
-          active={tab === "confirmed"}
-          onPress={() => setTab("confirmed")}
+          active={tab === "schedule"}
+          onPress={() => setTab("schedule")}
         />
       </View>
 
       <AppModal modal={modal} onClose={() => setModal(null)} />
+      <PlayerProfileScreen />
     </KeyboardAvoidingView>
   );
 }
@@ -615,6 +796,41 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: C.slate600,
   },
+  joinedTeamsToggle: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    backgroundColor: C.slate100,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  joinedTeamsToggleText: {
+    fontSize: 12,
+    color: C.slate700,
+    fontWeight: "600",
+  },
+  joinedTeamsList: {
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: C.slate200,
+    paddingTop: 8,
+    gap: 8,
+  },
+  joinedTeamRow: {
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.slate100,
+  },
+  joinedTeamName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: C.slate800,
+  },
+  joinedTeamCoach: {
+    marginTop: 2,
+    fontSize: 12,
+    color: C.slate600,
+  },
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -631,15 +847,6 @@ const s = StyleSheet.create({
     fontSize: 13,
     color: C.slate800,
     padding: 0,
-  },
-  profileBanner: {
-    backgroundColor: C.slate100,
-    borderRadius: 14,
-    padding: 14,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
   },
   profileLabel: {
     fontSize: 10,

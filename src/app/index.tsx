@@ -5,46 +5,47 @@
 import { Bell, LogOut, RotateCw } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Animated,
-  Easing,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Animated,
+    Easing,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
-import { loadAllData } from "../api";
+import { getCoachPlayerNotes, loadAllData } from "../api";
 import {
-  clearLoggedInUserId,
-  getLoggedInUserId,
-  getNotificationsForUser,
-  getSentGameNotifs,
-  markAllRead,
-  saveLoggedInUserId,
-  saveSentGameNotifs,
-  sendAppNotification,
+    clearLoggedInUserId,
+    getLoggedInUserId,
+    getNotificationsForUser,
+    getSentGameNotifs,
+    markAllRead,
+    saveLoggedInUserId,
+    saveSentGameNotifs,
+    sendAppNotification,
 } from "../storage";
 import {
-  AdminSettings,
-  AppNotification,
-  Club,
-  Game,
-  MatchApplication,
-  RosterEntry,
-  TeamGroup,
-  User,
+    AdminSettings,
+    AppNotification,
+    Club,
+    CoachPlayerNote,
+    Game,
+    MatchApplication,
+    RosterEntry,
+    TeamGroup,
+    User,
 } from "../types";
 
 import {
-  C,
-  ErrorScreen,
-  LangSwitcher,
-  LoadingScreen,
-  Toast,
+    C,
+    ErrorScreen,
+    LangSwitcher,
+    LoadingScreen,
+    Toast,
 } from "../components/shared";
 import { LanguageProvider, useLanguage } from "../i18n";
 import AdminScreen from "../screens/AdminScreen";
@@ -52,6 +53,50 @@ import CoachScreen from "../screens/CoachScreen";
 import GuardianScreen from "../screens/GuardianScreen";
 import LoginScreen from "../screens/LoginScreen";
 import PlayerScreen from "../screens/PlayerScreen";
+
+const KNOWN_APP_ROLES = ["coach", "player", "guardian", "admin"] as const;
+type KnownAppRole = (typeof KNOWN_APP_ROLES)[number];
+
+function parseKnownRoles(raw: unknown): KnownAppRole[] {
+  const rawTokens = Array.isArray(raw)
+    ? raw.map((v) => String(v))
+    : String(raw || "")
+        .split(/[\s,，;|/]+/)
+        .map((v) => v.trim())
+        .filter(Boolean);
+  const roles = rawTokens
+    .map((token) => token.toLowerCase())
+    .filter((token): token is KnownAppRole =>
+      (KNOWN_APP_ROLES as readonly string[]).includes(token),
+    );
+  return Array.from(new Set(roles));
+}
+
+function renderNotifText(raw: string, t: (key: any) => any): string {
+  if (!raw) return raw;
+
+  const idx = raw.indexOf("i18n:");
+  if (idx === -1) return raw;
+
+  const prefix = raw.slice(0, idx);
+  const payload = raw.slice(idx + 5);
+  const [key, ...parts] = payload.split("|");
+  let text = String(t(key as any) ?? key);
+
+  for (const part of parts) {
+    const [name, ...valueParts] = part.split("=");
+    if (!name) continue;
+    let value = valueParts.join("=") || "";
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      // Keep raw value when payload is not valid URI-encoding.
+    }
+    text = text.replaceAll(`{${name}}`, value);
+  }
+
+  return prefix + text;
+}
 
 function InboxPanel({ inbox, onClose }: { inbox: any[]; onClose: () => void }) {
   const { t } = useLanguage();
@@ -67,15 +112,19 @@ function InboxPanel({ inbox, onClose }: { inbox: any[]; onClose: () => void }) {
         {inbox.length === 0 ? (
           <Text style={styles.inboxEmpty}>{t("noNotifsText")}</Text>
         ) : (
-          inbox.slice(0, 20).map((n) => (
-            <View key={n.id} style={styles.inboxItem}>
-              <Text style={styles.inboxItemTitle}>{n.title}</Text>
-              <Text style={styles.inboxItemBody}>{n.body}</Text>
-              <Text style={styles.inboxItemTime}>
-                {new Date(n.ts).toLocaleString()}
-              </Text>
-            </View>
-          ))
+          inbox.slice(0, 20).map((n) => {
+            const title = renderNotifText(n.title, t);
+            const body = renderNotifText(n.body, t);
+            return (
+              <View key={n.id} style={styles.inboxItem}>
+                <Text style={styles.inboxItemTitle}>{title}</Text>
+                <Text style={styles.inboxItemBody}>{body}</Text>
+                <Text style={styles.inboxItemTime}>
+                  {new Date(n.ts).toLocaleString()}
+                </Text>
+              </View>
+            );
+          })
         )}
       </ScrollView>
     </View>
@@ -98,9 +147,15 @@ export default function App() {
     underageLimit: 16,
   });
   const [clubs, setClubs] = useState<Club[]>([]);
+  const [coachPlayerNotes, setCoachPlayerNotes] = useState<CoachPlayerNote[]>([]);
+  const [offlineParticipationByGame, setOfflineParticipationByGame] = useState<
+    Record<string, Record<string, "waiting" | "participating" | "out">>
+  >({});
 
   const [toast, setToast] = useState<string | null>(null);
   const [coachProfileOpen, setCoachProfileOpen] = useState(false);
+  const [playerProfileOpen, setPlayerProfileOpen] = useState(false);
+  const [guardianProfileOpen, setGuardianProfileOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inbox, setInbox] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -109,7 +164,8 @@ export default function App() {
     (n) =>
       !n.read &&
       (n.title.includes("New Match Application") ||
-        n.title.includes("新对战申请")),
+        n.title.includes("新对战申请") ||
+        n.title.startsWith("i18n:notifMatchApplicationTitle")),
   );
 
   // Spin animation for refresh button
@@ -149,6 +205,11 @@ export default function App() {
       setRosters(data.rosters);
       setAdminSettings(data.adminSettings);
       setClubs(data.clubs);
+      if (currentUser?.role === "coach") {
+        setCoachPlayerNotes(await getCoachPlayerNotes(currentUser.id));
+      } else {
+        setCoachPlayerNotes([]);
+      }
     } catch {
       // ignore
     } finally {
@@ -177,6 +238,7 @@ export default function App() {
         setRosters(data.rosters);
         setAdminSettings(data.adminSettings);
         setClubs(data.clubs);
+        setCoachPlayerNotes([]);
         setIsLoading(false);
         return;
       } catch (err: any) {
@@ -206,6 +268,37 @@ export default function App() {
     });
   }, [isLoading, users]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const latest = users.find((u) => u.id === currentUser.id);
+    if (!latest) return;
+    const normalizedAvailableRoles = parseKnownRoles([
+      ...(latest.availableRoles || []),
+      latest.role,
+    ]);
+    const safeAvailableRoles =
+      normalizedAvailableRoles.length > 0
+        ? normalizedAvailableRoles
+        : (["player"] as KnownAppRole[]);
+    const normalizedCurrentRole = parseKnownRoles(currentUser.role)[0];
+    const nextRole = safeAvailableRoles.includes(
+      normalizedCurrentRole || ("player" as KnownAppRole),
+    )
+      ? (normalizedCurrentRole as KnownAppRole)
+      : safeAvailableRoles[0];
+    setCurrentUser({ ...latest, availableRoles: safeAvailableRoles, role: nextRole });
+  }, [users]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "coach") {
+      setCoachPlayerNotes([]);
+      return;
+    }
+    getCoachPlayerNotes(currentUser.id)
+      .then(setCoachPlayerNotes)
+      .catch(() => {});
+  }, [currentUser?.id, currentUser?.role]);
+
   // ---- Re-fetch all data after login (so newly registered users see fresh state) ----
   const handleLogin = useCallback(async (user: User) => {
     setCurrentUser(user);
@@ -219,10 +312,26 @@ export default function App() {
       setRosters(data.rosters);
       setAdminSettings(data.adminSettings);
       setClubs(data.clubs);
+      if (user.role === "coach") {
+        setCoachPlayerNotes(await getCoachPlayerNotes(user.id));
+      } else {
+        setCoachPlayerNotes([]);
+      }
     } catch {
       // ignore — already have data from initial load
     }
   }, []);
+
+  const handleSwitchRole = () => {
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const roles = parseKnownRoles([...(prev.availableRoles || []), prev.role]);
+      if (roles.length < 2) return prev;
+      const idx = roles.indexOf(prev.role as KnownAppRole);
+      const nextRole = roles[(idx + 1 + roles.length) % roles.length];
+      return { ...prev, role: nextRole };
+    });
+  };
 
   // ---- In-app notification polling (every 3s) ----
   useEffect(() => {
@@ -339,10 +448,18 @@ export default function App() {
     setAdminSettings,
     clubs,
     setClubs,
+    coachPlayerNotes,
+    setCoachPlayerNotes,
+    offlineParticipationByGame,
+    setOfflineParticipationByGame,
     showToast,
     sendAppNotification,
     coachProfileOpen,
     setCoachProfileOpen,
+    playerProfileOpen,
+    setPlayerProfileOpen,
+    guardianProfileOpen,
+    setGuardianProfileOpen,
     hasUnreadMatchApplicationNotif,
   };
 
@@ -365,6 +482,18 @@ export default function App() {
       </LanguageProvider>
     );
 
+  const normalizedAvailableRoles = parseKnownRoles([
+    ...(currentUser.availableRoles || []),
+    currentUser.role,
+  ]);
+  const safeAvailableRoles =
+    normalizedAvailableRoles.length > 0
+      ? normalizedAvailableRoles
+      : (["player"] as KnownAppRole[]);
+  const activeRole = safeAvailableRoles.includes(currentUser.role as KnownAppRole)
+    ? (currentUser.role as KnownAppRole)
+    : safeAvailableRoles[0];
+
   return (
     <LanguageProvider>
       <SafeAreaView style={styles.safeArea}>
@@ -372,20 +501,48 @@ export default function App() {
 
         {/* ---- Header ---- */}
         <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() =>
-              currentUser.role === "coach" && setCoachProfileOpen(true)
-            }
-            activeOpacity={currentUser.role === "coach" ? 0.6 : 1}
-          >
-            <Text style={styles.headerName}>{currentUser.name}</Text>
-            <Text style={styles.headerRole}>
-              {currentUser.role.toUpperCase()}
-              {currentUser.role === "coach" && (
-                <Text style={{ fontSize: 11, color: "#3b82f6" }}> ✎</Text>
-              )}
-            </Text>
-          </TouchableOpacity>
+          <View>
+            <TouchableOpacity
+              onPress={() => {
+                if (activeRole === "coach") setCoachProfileOpen(true);
+                if (activeRole === "player") setPlayerProfileOpen(true);
+                if (activeRole === "guardian")
+                  setGuardianProfileOpen(true);
+              }}
+              activeOpacity={
+                activeRole === "coach" ||
+                activeRole === "player" ||
+                activeRole === "guardian"
+                  ? 0.6
+                  : 1
+              }
+            >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={styles.headerName}>{currentUser.name}</Text>
+                  {activeRole === "coach" && (
+                    <View style={styles.headerCountBadge}>
+                      <Text style={styles.headerCountText}>
+                        {currentUser.gamesPlayedCount ?? 0}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              <Text style={styles.headerRole}>
+                {activeRole.toUpperCase()}
+                {activeRole === "coach" && (
+                  <Text style={{ fontSize: 11, color: "#3b82f6" }}> ✎</Text>
+                )}
+              </Text>
+            </TouchableOpacity>
+            {safeAvailableRoles.length > 1 && (
+              <TouchableOpacity
+                style={styles.roleSwitchBtn}
+                onPress={handleSwitchRole}
+              >
+                <Text style={styles.roleSwitchText}>Switch Role</Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <LangSwitcher />
             <TouchableOpacity
@@ -433,16 +590,16 @@ export default function App() {
 
         {/* ---- Role-based screen ---- */}
         <View style={{ flex: 1 }}>
-          {currentUser.role === "coach" && (
+          {activeRole === "coach" && (
             <CoachScreen state={sharedState as any} />
           )}
-          {currentUser.role === "player" && (
+          {activeRole === "player" && (
             <PlayerScreen state={sharedState as any} />
           )}
-          {currentUser.role === "guardian" && (
+          {activeRole === "guardian" && (
             <GuardianScreen state={sharedState as any} />
           )}
-          {currentUser.role === "admin" && (
+          {activeRole === "admin" && (
             <AdminScreen state={sharedState as any} />
           )}
         </View>
@@ -475,6 +632,19 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   headerName: { fontSize: 17, fontWeight: "bold", color: C.slate800 },
+    headerCountBadge: {
+      backgroundColor: "#dbeafe",
+      borderRadius: 999,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderWidth: 1,
+      borderColor: "#93c5fd",
+    },
+    headerCountText: {
+      fontSize: 11,
+      color: C.blue,
+      fontWeight: "700",
+    },
   headerRole: {
     fontSize: 10,
     fontWeight: "700",
@@ -487,6 +657,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
     overflow: "hidden",
   },
+  roleSwitchBtn: {
+    marginTop: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: "#eff6ff",
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+  },
+  roleSwitchText: { fontSize: 11, fontWeight: "700", color: C.blue },
   headerBtn: { padding: 8, position: "relative" },
   notifBadge: {
     position: "absolute",

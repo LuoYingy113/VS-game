@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react-native";
 import React, { useState } from "react";
 import {
     ActivityIndicator,
+    Image,
     KeyboardAvoidingView,
     Platform,
     Pressable,
@@ -19,6 +20,8 @@ import {
 } from "react-native";
 import { Lang, useLanguage } from "../i18n";
 import { ModalConfig } from "../types";
+
+const welcomeImage = require("../../welcome.png");
 
 // ==========================================
 // 颜色常量 (defined first — used by all components below)
@@ -114,9 +117,13 @@ export function AppModal({ modal, onClose }: AppModalProps) {
       animationType="fade"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
-        <Pressable style={styles.modalOverlay} onPress={onClose}>
-          <Pressable style={styles.modalCard} onPress={() => {}}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+          <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{modal?.title}</Text>
               <TouchableOpacity onPress={onClose} hitSlop={8}>
@@ -125,12 +132,14 @@ export function AppModal({ modal, onClose }: AppModalProps) {
             </View>
             <ScrollView
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              contentContainerStyle={{ paddingBottom: 8 }}
             >
               {modal?.content}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </RNModal>
   );
@@ -143,15 +152,19 @@ export function LoadingScreen() {
   const { t } = useLanguage();
   return (
     <View style={styles.centeredScreen}>
-      <View style={styles.logoBox}>
-        <Text style={styles.logoIcon}>🛡</Text>
+      <Image
+        source={welcomeImage}
+        style={styles.welcomeImage}
+        resizeMode="contain"
+      />
+      <View style={styles.welcomeBanner}>
+        <Text style={styles.welcomeBannerText}>{t("loadingWelcomeBanner")}</Text>
       </View>
       <ActivityIndicator
         color="#2563eb"
         size="large"
-        style={{ marginTop: 20 }}
+        style={{ marginTop: 6 }}
       />
-      <Text style={styles.connectingText}>{t("connectingText")}</Text>
     </View>
   );
 }
@@ -326,7 +339,11 @@ export function DatePickerField({
     month: "long",
     year: "numeric",
   });
-  const dayHeaders: string[] = t("calDays");
+  const dayHeadersRaw = t("calDays");
+  const dayHeaders: string[] =
+    Array.isArray(dayHeadersRaw) && dayHeadersRaw.length === 7
+      ? dayHeadersRaw
+      : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // Build calendar grid (Mon-first)
   const firstDay = new Date(viewYear, viewMonth, 1);
@@ -829,22 +846,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 24,
   },
-  logoBox: {
-    width: 72,
-    height: 72,
+  welcomeImage: {
+    width: 180,
+    height: 180,
+    marginBottom: 12,
+  },
+  welcomeBanner: {
     backgroundColor: C.blue,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    marginBottom: 18,
   },
-  logoIcon: {
-    fontSize: 36,
-  },
-  connectingText: {
-    color: C.slate500,
-    fontSize: 14,
-    marginTop: 12,
+  welcomeBannerText: {
+    color: C.white,
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
   errorTitle: {
     fontSize: 20,
