@@ -3654,9 +3654,9 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                               const teamAge = homeGroup?.ageGroup ? formatAgeGroupLabel(homeGroup.ageGroup) : null;
                               const searchAge = game.ageGroup;
                               if (teamAge && teamAge !== searchAge) {
-                                return `${clubName} - ${teamAge} → ${searchAge}`;
+                                return `${clubName} - ${teamAge} → looking for ${searchAge}`;
                               }
-                              return `${clubName} - ${searchAge}`;
+                              return `${clubName} - looking for ${searchAge}`;
                             })()}
                           </Text>
                           <View
@@ -5625,8 +5625,8 @@ function GameManagementCard({
         <View style={{ flex: 1 }}>
           <Text style={s.cardTitle}>
             {game.status === "locked"
-              ? `${sportEmoji(game.sport)} VS ${opponentGroup?.name ?? opponentCoach?.name ?? t("pendingLabel")} - ${game.ageGroup} (${titleTimeText})`
-              : `${sportEmoji(game.sport)} ${displayClub ? (homeGroup ? `${displayClub.name} - ${homeGroup.name}` : displayClub.name) : (homeGroup?.name ?? homeCoach?.name ?? game.sport)} - ${game.ageGroup} (${titleTimeText})`}
+              ? `${sportEmoji(game.sport)} VS ${opponentGroupClub?.name ?? opponentCoach?.name ?? t("pendingLabel")} - looking for ${game.ageGroup} (${titleTimeText})`
+              : `${sportEmoji(game.sport)} ${displayClub ? (homeGroup ? `${displayClub.name} - ${homeGroup.name}` : displayClub.name) : (homeGroup?.name ?? homeCoach?.name ?? game.sport)} - looking for ${game.ageGroup} (${titleTimeText})`}
           </Text>
           <View style={s.cardMetaRow}>
             <View
@@ -5742,12 +5742,6 @@ function GameManagementCard({
                       </Text>
                     </TouchableOpacity>
                   </View>
-                )}
-                {opponentGroup && (
-                  <InfoRow
-                    label={t("opponentGroupLabel")}
-                    value={opponentGroupClub?.name ? `${opponentGroupClub.name} - ${opponentGroup.name}` : opponentGroup.name}
-                  />
                 )}
               </>
             )}
@@ -5932,16 +5926,16 @@ function GameManagementCard({
                   const applicantGroupDisplay = applicantGroup
                     ? `${applicantClub?.name ?? "\u2014"} \u00b7 ${applicantGroup.name}`
                     : "\u2014";
-                  const applicantMeta =
-                    `${formatAgeGroupLabel(applicantGroup?.ageGroup) || "\u2014"} \u00b7 ` +
-                    (applicantGroup?.gender
-                      ? t(
-                          `gender${
-                            applicantGroup.gender.charAt(0).toUpperCase() +
-                            applicantGroup.gender.slice(1)
-                          }` as any,
-                        )
-                      : "\u2014");
+                  const applicantAgeLabel =
+                    formatAgeGroupLabel(applicantGroup?.ageGroup) || "\u2014";
+                  const applicantGenderLabel = applicantGroup?.gender
+                    ? t(
+                        `gender${
+                          applicantGroup.gender.charAt(0).toUpperCase() +
+                          applicantGroup.gender.slice(1)
+                        }` as any,
+                      )
+                    : "\u2014";
                   return (
                     <View key={app.id} style={s.pendingRow}>
                       <View style={{ flex: 1, gap: 4 }}>
@@ -5951,7 +5945,12 @@ function GameManagementCard({
                         <Text style={s.pendingMetaText}>
                           {t("opponentCoachLabel")}: {opp?.name ?? "\u2014"}
                         </Text>
-                        <Text style={s.pendingMetaText}>{applicantMeta}</Text>
+                        <Text style={s.pendingMetaText}>
+                          <Text style={{ fontWeight: "700", color: C.slate700 }}>
+                            {applicantAgeLabel}
+                          </Text>
+                          {` \u00b7 ${applicantGenderLabel}`}
+                        </Text>
                         <Text style={s.pendingMetaText}>
                           {t("labelEmail")}: {opp?.email ?? "\u2014"}
                         </Text>

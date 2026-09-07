@@ -48,3 +48,6 @@ seq 1 40 | xargs -I{} -P 2 sh -c 'curl -s -o /dev/null -w "total:%{time_total}s 
 
 ~
 (END)
+
+psql "postgresql://postgres:XxnwxX@localhost:5432/team_matcher_db" -c "INSERT INTO users (id, role, name, email, phone, dob, guardian_id, bio, sport, status, password, default_location, default_club_id, games_played_count, verification_token) VALUES ('player_001','player','Player One','[player1@example.com](mailto:player1@example.com)',NULL,NULL,NULL,NULL,'Football/Soccer','active','password123',NULL,NULL,0,NULL), ('player_002','player','Player Two','[player2@example.com](mailto:player2@example.com)',NULL,NULL,NULL,NULL,'Basketball','active','password123',NULL,NULL,0,NULL), ('player_003','player','Player Three','[player3@example.com](mailto:player3@example.com)',NULL,NULL,NULL,NULL,'Tennis','active','password123',NULL,NULL,0,NULL), ('player_004','player','Player Four','[player4@example.com](mailto:player4@example.com)',NULL,NULL,NULL,NULL,'Volleyball','active','password123',NULL,NULL,0,NULL);"
+git pull --rebase origin <你的分支名>

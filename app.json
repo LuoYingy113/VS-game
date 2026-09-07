@@ -3,7 +3,7 @@
     "name": "team-matcher-app",
     "slug": "team-matcher-app",
     "version": "1.0.6",
-    "sdkVersion": "54.0.0",
+    "sdkVersion": "57.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "teammatcherapp",
@@ -49,7 +49,7 @@
       "@react-native-community/datetimepicker"
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": false
     },
     "extra": {
       "router": {},
