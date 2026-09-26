@@ -54,3 +54,10 @@ Recommended reading order:
 1. `frontend-modules.md`
 2. `backend-main-modules.md`
 3. `new-machine-setup.md`
+
+## Architecture diagram：
+<p align="center">
+  <img src="assets/b.jpeg" alt="项目横幅" width="350" />
+  <img src="assets/function.jpeg" alt="项目横幅" width="350" />
+  
+</p>
