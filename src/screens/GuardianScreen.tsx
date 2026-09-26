@@ -3,7 +3,7 @@
  * 对应 App.jsx 的 GuardianView
  */
 import { Calendar, Check } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -13,11 +13,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { apiFetch, mapGame } from "../api";
+import { apiFetch, mapGame, mapUser } from "../api";
 import { C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
 import { clearLoggedInUserId, notifI18n, sendAppNotification } from "../storage";
@@ -55,17 +56,55 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
   } = state;
   const { t } = useLanguage();
   const [tab, setTab] = useState<"approvals" | "schedule">("approvals");
+  const [profileFirstName, setProfileFirstName] = useState(
+    currentUser.firstName ?? "",
+  );
+  const [profileLastName, setProfileLastName] = useState(
+    currentUser.lastName ?? "",
+  );
+  const [profilePhone, setProfilePhone] = useState(currentUser.phone ?? "");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileOpenAnimatedOnce, setProfileOpenAnimatedOnce] = useState(false);
+  const [playerBindEmail, setPlayerBindEmail] = useState("");
+  const [bindingPlayer, setBindingPlayer] = useState(false);
+  const [bindPlayerResult, setBindPlayerResult] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const myChildren = users.filter((u) => u.guardianId === currentUser.id);
+  const [managedPlayerId, setManagedPlayerId] = useState<string | null>(
+    myChildren[0]?.id ?? null,
+  );
+
+  useEffect(() => {
+    if (myChildren.length === 0) {
+      setManagedPlayerId(null);
+      return;
+    }
+    setManagedPlayerId((prev) =>
+      prev && myChildren.some((child) => child.id === prev)
+        ? prev
+        : myChildren[0].id,
+    );
+  }, [myChildren]);
+
+  const selectedChild =
+    myChildren.find((child) => child.id === managedPlayerId) ??
+    myChildren[0] ??
+    null;
+  const visibleChildIds = selectedChild
+    ? [selectedChild.id]
+    : myChildren.map((child) => child.id);
+
   const pendingApprovals = rosters.filter(
     (r) =>
-      r.status === "pending_guardian" &&
-      myChildren.some((c) => c.id === r.playerId),
+      r.status === "pending_guardian" && visibleChildIds.includes(r.playerId),
   );
   const childrenRosters = rosters.filter(
     (r) =>
       (r.status === "approved" || r.status === "pending_coach") &&
-      myChildren.some((c) => c.id === r.playerId),
+      visibleChildIds.includes(r.playerId),
   );
   const uniqueGameIds = [...new Set(childrenRosters.map((r) => r.gameId))];
   const activeGames = uniqueGameIds
@@ -148,11 +187,75 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
     ]);
   };
 
+  const handleSaveProfile = async () => {
+    const nextFirstName = profileFirstName.trim();
+    const nextLastName = profileLastName.trim();
+    if (!nextFirstName && !nextLastName) {
+      showToast(t("nameRequired"));
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      const data = await apiFetch(`/users/${currentUser.id}/profile`, {
+        method: "PUT",
+        body: {
+          firstName: nextFirstName || null,
+          lastName: nextLastName || null,
+          phone: profilePhone.trim() || null,
+        },
+      });
+      setCurrentUser(mapUser(data));
+      showToast(t("profileSaved"));
+    } catch (err: any) {
+      showToast("Failed: " + err.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleBindPlayerByEmail = async () => {
+    const email = playerBindEmail.trim();
+    if (!email || !email.includes("@")) {
+      showToast(t("profileBindPlayerInvalid"));
+      return;
+    }
+
+    setBindingPlayer(true);
+    setBindPlayerResult(null);
+    try {
+      const data = await apiFetch("/guardian_player_link_requests", {
+        method: "POST",
+        body: {
+          guardianId: currentUser.id,
+          playerEmail: email,
+        },
+      });
+      setPlayerBindEmail("");
+      setBindPlayerResult({
+        type: "success",
+        text: data?.message || t("profileBindPlayerSuccess"),
+      });
+      showToast(data?.message || t("profileBindPlayerSuccess"));
+    } catch (err: any) {
+      const text = err?.message || t("profileBindPlayerFailed");
+      setBindPlayerResult({ type: "error", text });
+      showToast("Failed: " + text);
+    } finally {
+      setBindingPlayer(false);
+    }
+  };
+
   const insets = useSafeAreaInsets();
-  const GuardianProfileScreen = () => (
+
+  const guardianProfileModal = (
     <Modal
       visible={guardianProfileOpen}
-      animationType="slide"
+      animationType={profileOpenAnimatedOnce ? "none" : "slide"}
+      onShow={() => {
+        if (!profileOpenAnimatedOnce) {
+          setProfileOpenAnimatedOnce(true);
+        }
+      }}
       onRequestClose={() => setGuardianProfileOpen(false)}
     >
       <KeyboardAvoidingView
@@ -195,9 +298,128 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
             <Text style={{ fontSize: 10, color: C.slate500, fontWeight: "700" }}>
               {t("profileInfoBanner")}
             </Text>
-            <Text style={[s.cardTitle, { marginTop: 8 }]}>{currentUser.name}</Text>
+
+            {myChildren.length > 0 && (
+              <View style={{ marginTop: 10 }}>
+                <Text style={s.metaText}>{t("profileManagedPlayerLabel")}</Text>
+                <View style={s.selectorWrap}>
+                  {myChildren.map((child) => {
+                    const active = managedPlayerId === child.id;
+                    return (
+                      <TouchableOpacity
+                        key={child.id}
+                        style={[
+                          s.selectorOption,
+                          active && s.selectorOptionActive,
+                        ]}
+                        onPress={() => setManagedPlayerId(child.id)}
+                      >
+                        <Text
+                          style={[
+                            s.selectorText,
+                            active && s.selectorTextActive,
+                          ]}
+                        >
+                          {child.name || child.email}
+                        </Text>
+                        {active && <Check size={14} color={C.blue} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+
+            <View style={{ marginTop: 12 }}>
+              <Text style={s.metaText}>{t("profileBindPlayerLabel")}</Text>
+              <TextInput
+                style={[s.profileInput, { marginTop: 6 }]}
+                value={playerBindEmail}
+                onChangeText={setPlayerBindEmail}
+                placeholder={t("profileBindPlayerPlaceholder")}
+                placeholderTextColor={C.slate400}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                style={[
+                  s.bindingBtn,
+                  bindingPlayer && { opacity: 0.6 },
+                ]}
+                onPress={handleBindPlayerByEmail}
+                disabled={bindingPlayer}
+              >
+                <Text style={s.bindingBtnText}>
+                  {bindingPlayer ? t("loading") : t("profileBindPlayerBtn")}
+                </Text>
+              </TouchableOpacity>
+              {!!bindPlayerResult && (
+                <Text
+                  style={[
+                    s.bindResult,
+                    bindPlayerResult.type === "error" && s.bindResultError,
+                  ]}
+                >
+                  {bindPlayerResult.text}
+                </Text>
+              )}
+            </View>
+
+            <Text style={[s.metaText, { marginTop: 10 }]}>{t("profileFirstName")}</Text>
+            <TextInput
+              style={s.profileInput}
+              value={profileFirstName}
+              onChangeText={setProfileFirstName}
+              placeholder={t("profileFirstNamePlaceholder")}
+              placeholderTextColor={C.slate400}
+            />
+            <Text style={[s.metaText, { marginTop: 10 }]}>{t("profileLastName")}</Text>
+            <TextInput
+              style={s.profileInput}
+              value={profileLastName}
+              onChangeText={setProfileLastName}
+              placeholder={t("profileLastNamePlaceholder")}
+              placeholderTextColor={C.slate400}
+            />
+            <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelEmail")}</Text>
             <Text style={s.metaText}>{currentUser.email}</Text>
+
+            <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelPhone")}</Text>
+            <TextInput
+              style={s.profileInput}
+              value={profilePhone}
+              onChangeText={setProfilePhone}
+              placeholder="+1 555 0000"
+              placeholderTextColor={C.slate400}
+              keyboardType="phone-pad"
+            />
+
+            {selectedChild && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[s.metaText, { fontWeight: "700" }]}>
+                  {selectedChild.name}
+                </Text>
+                <Text style={[s.metaText, { marginTop: 6 }]}>
+                  {t("profileChildJerseyNumberLabel")}:{" "}
+                  {selectedChild.jerseyNumber || t("profileNoValuePlaceholder")}
+                </Text>
+                <Text style={s.metaText}>
+                  {t("profileChildDobLabel")}:{" "}
+                  {selectedChild.dob || t("profileNoValuePlaceholder")}
+                </Text>
+              </View>
+            )}
           </View>
+
+          <TouchableOpacity
+            style={[s.volunteerBtn, profileSaving && { opacity: 0.6 }]}
+            onPress={handleSaveProfile}
+            disabled={profileSaving}
+          >
+            <Text style={s.volunteerBtnText}>
+              {profileSaving ? t("loading") : t("saveChangesBtn")}
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[s.volunteerBtn, { backgroundColor: C.red }]}
@@ -443,7 +665,7 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
           onPress={() => setTab("schedule")}
         />
       </View>
-      <GuardianProfileScreen />
+      {guardianProfileModal}
     </KeyboardAvoidingView>
   );
 }
@@ -562,6 +784,68 @@ const s = StyleSheet.create({
     borderRadius: 12,
   },
   metaText: { fontSize: 13, color: C.slate600, marginTop: 2 },
+  profileInput: {
+    borderWidth: 1,
+    borderColor: C.slate300,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 13,
+    color: C.slate800,
+    backgroundColor: C.white,
+    marginTop: 6,
+  },
+  bindingBtn: {
+    backgroundColor: C.blue,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  bindingBtnText: { color: C.white, fontWeight: "700", fontSize: 12 },
+  bindResult: {
+    marginTop: 8,
+    backgroundColor: "#ecfdf5",
+    borderColor: "#a7f3d0",
+    borderWidth: 1,
+    borderRadius: 8,
+    color: "#065f46",
+    fontSize: 12,
+    padding: 8,
+  },
+  bindResultError: {
+    backgroundColor: "#fef2f2",
+    borderColor: "#fecaca",
+    color: "#991b1b",
+  },
+  selectorWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  selectorOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: C.slate100,
+    borderWidth: 1,
+    borderColor: C.slate200,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  selectorOptionActive: {
+    backgroundColor: "#eff6ff",
+    borderColor: C.blue,
+  },
+  selectorText: {
+    fontSize: 12,
+    color: C.slate700,
+    fontWeight: "600",
+  },
+  selectorTextActive: {
+    color: C.blue,
+  },
   volunteerBox: {
     backgroundColor: "#f5f3ff",
     borderRadius: 10,

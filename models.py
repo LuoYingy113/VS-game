@@ -12,7 +12,8 @@ class User(Base):
 
     id = Column(String, primary_key=True, index=True)
     role = Column(String, index=True)  # single role or comma-separated roles
-    name = Column(String)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
     email = Column(String, unique=True, index=True)
     phone = Column(String, nullable=True)
     dob = Column(String, nullable=True)
@@ -25,6 +26,21 @@ class User(Base):
     default_club_id = Column(String, nullable=True)
     games_played_count = Column(Integer, nullable=False, default=0)
     verification_token = Column(String, nullable=True)
+    jersey_number = Column(String, nullable=True)
+
+    @property
+    def name(self) -> str:
+        first = (self.first_name or "").strip()
+        last = (self.last_name or "").strip()
+        if first and last:
+            return f"{first} {last}"
+        return first or last
+
+    @name.setter
+    def name(self, value: str) -> None:
+        # Backward compatibility: existing code assigns full name to `name`.
+        self.first_name = (value or "").strip() or None
+        self.last_name = None
 
 class Game(Base):
     __tablename__ = "games"
@@ -89,6 +105,17 @@ class CoachPlayerNote(Base):
     coach_id = Column(String, ForeignKey("users.id"), index=True)
     player_id = Column(String, index=True)
     nickname = Column(String)
+
+class GuardianPlayerLinkRequest(Base):
+    __tablename__ = "guardian_player_link_requests"
+
+    id = Column(String, primary_key=True, index=True)
+    guardian_id = Column(String, ForeignKey("users.id"), index=True)
+    player_id = Column(String, ForeignKey("users.id"), index=True)
+    token = Column(String, unique=True, index=True)
+    status = Column(String, default="pending")
+    created_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False)
 
 class Settings(Base):
     __tablename__ = "app_settings"

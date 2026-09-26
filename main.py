@@ -110,6 +110,26 @@ def send_admin_registration_notification(user_email: str, user_name: str, role: 
     threading.Thread(target=_do, daemon=True).start()
 
 
+def send_guardian_link_request_email(to_email: str, player_name: str, guardian_name: str, confirm_url: str):
+    html = f"""
+    <div style="font-family:sans-serif;max-width:520px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+      <h2 style="color:#7c3aed">Team Matcher — 监护人绑定确认 / Guardian Link Confirmation</h2>
+      <p>Hi {player_name}，有人（{guardian_name}）请求绑定为您的监护人。</p>
+      <p>请确认此请求，以便该监护人可以查看并审批您的比赛参与情况。</p>
+      <a href="{confirm_url}" style="display:inline-block;padding:12px 28px;background:#7c3aed;color:#fff;border-radius:8px;text-decoration:none;font-weight:bold;margin:16px 0">确认绑定 / Confirm link</a>
+      <p style="color:#64748b;font-size:13px">如果按钮无法点击，请复制以下链接：<br>{confirm_url}</p>
+      <p style="color:#94a3b8;font-size:12px">此链接有效期为 24 小时。如非本人操作，请忽略此邮件。</p>
+    </div>
+    """
+    def _do():
+        try:
+            _send_email(to_email, "监护人绑定确认 / Guardian Link Confirmation", html)
+            print(f"[EMAIL OK] Guardian link request sent to {to_email}", flush=True)
+        except Exception as e:
+            print(f"[EMAIL ERROR] Guardian link request to {to_email}: {e}", flush=True)
+    threading.Thread(target=_do, daemon=True).start()
+
+
 _INVALID_PWD_RE = re.compile(r'[ <>"\']')
 GROUP_INVITE_TTL_HOURS = 48
 
@@ -787,6 +807,18 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE users ADD COLUMN status VARCHAR DEFAULT 'active'"))
             if 'password' not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN password VARCHAR DEFAULT 'password123'"))
+            if 'first_name' not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN first_name VARCHAR"))
+            if 'last_name' not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN last_name VARCHAR"))
+            # One-time backfill: keep existing full name in first_name per requirement.
+            if 'name' in user_cols:
+                conn.execute(text("""
+                    UPDATE users
+                    SET first_name = name
+                    WHERE (first_name IS NULL OR first_name = '')
+                      AND name IS NOT NULL
+                """))
         if 'users' in existing_tables:
             user_cols2 = {c['name'] for c in insp.get_columns('users')}
             if 'default_location' not in user_cols2:
@@ -797,6 +829,8 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE users ADD COLUMN games_played_count INTEGER DEFAULT 0"))
             if 'verification_token' not in user_cols2:
                 conn.execute(text("ALTER TABLE users ADD COLUMN verification_token VARCHAR"))
+            if 'jersey_number' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN jersey_number VARCHAR"))
         if 'invite_codes' in existing_tables:
             invite_cols = {c['name'] for c in insp.get_columns('invite_codes')}
             if 'group_id' not in invite_cols:
@@ -900,6 +934,8 @@ class UserResponse(BaseModel):
     id: str
     role: str
     name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: str
     phone: Optional[str] = None
     dob: Optional[str] = None
@@ -911,12 +947,18 @@ class UserResponse(BaseModel):
     default_club_id: Optional[str] = None
     games_played_count: int = 0
     verification_token: Optional[str] = None
+    jersey_number: Optional[str] = None
     class Config:
         from_attributes = True
 
 class CoachProfileUpdate(BaseModel):
     name: Optional[str] = None
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
     phone: Optional[str] = None
+    dob: Optional[str] = None
+    jerseyNumber: Optional[str] = None
     defaultLocation: Optional[str] = None
     defaultClubId: Optional[str] = None
     sport: Optional[str] = None
@@ -1219,6 +1261,39 @@ def send_guardian_email_code_endpoint(
     save_email_code(db, email, code, _time.time() + 600)
     background_tasks.add_task(_send_code_email_safe, email, code, "send_guardian_email_code")
     return {"ok": True}
+
+class GuardianRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    emailCode: str
+
+@app.post("/api/register_guardian", response_model=UserResponse, status_code=201)
+def register_guardian(body: GuardianRegisterRequest, db: Session = Depends(get_db)):
+    email_key = body.email.strip().lower()
+    if not is_email_code_valid(db, email_key, body.emailCode):
+        raise HTTPException(status_code=400, detail="邮箱验证码无效或已过期 / Email verification code is invalid or expired")
+    if _INVALID_PWD_RE.search(body.password):
+        raise HTTPException(status_code=400, detail="密码不能包含空格、<、>、引号 / Password cannot contain spaces, <, >, or quotes")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要6位 / Password must be at least 6 characters")
+    if db.query(models.User).filter(models.User.email == email_key).first():
+        raise HTTPException(status_code=400, detail="该邮箱已注册 / Email already registered")
+    new_guardian = models.User(
+        id=f"g_{uuid.uuid4().hex[:8]}",
+        role='guardian',
+        name=body.name,
+        email=email_key,
+        password=body.password,
+        status='active',
+        verification_token=None,
+    )
+    db.add(new_guardian)
+    db.commit()
+    db.refresh(new_guardian)
+    delete_email_code(db, email_key)
+    send_admin_registration_notification(new_guardian.email, new_guardian.name, 'guardian')
+    return new_guardian
 
 @app.post("/api/send_login_verify_code")
 def send_login_verify_code_endpoint(
@@ -1686,12 +1761,32 @@ def update_coach_profile(user_id: str, data: CoachProfileUpdate, db: Session = D
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if data.name is not None:
+    if data.firstName is not None or data.lastName is not None:
+        if data.firstName is not None:
+            user.first_name = data.firstName.strip() or None
+        if data.lastName is not None:
+            user.last_name = data.lastName.strip() or None
+    elif data.name is not None:
         stripped_name = data.name.strip()
         if stripped_name:
             user.name = stripped_name
+    if data.email is not None:
+        next_email = data.email.strip().lower()
+        if not next_email or "@" not in next_email:
+            raise HTTPException(status_code=400, detail="请输入有效的邮箱地址 / Invalid email address")
+        existing = db.query(models.User).filter(
+            models.User.email == next_email,
+            models.User.id != user_id,
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="该邮箱已注册 / Email already registered")
+        user.email = next_email
     if data.phone is not None:
         user.phone = data.phone.strip() or None
+    if data.dob is not None:
+        user.dob = data.dob.strip() or None
+    if data.jerseyNumber is not None:
+        user.jersey_number = data.jerseyNumber.strip() or None
     if data.defaultLocation is not None:
         user.default_location = data.defaultLocation.strip() or None
     if data.defaultClubId is not None:
@@ -1705,6 +1800,132 @@ def update_coach_profile(user_id: str, data: CoachProfileUpdate, db: Session = D
 class ChangePasswordRequest(BaseModel):
     newPassword: str
     emailCode: str
+
+
+class GuardianPlayerLinkRequestCreate(BaseModel):
+    guardianId: str
+    playerEmail: str
+
+
+@app.post("/api/guardian_player_link_requests")
+def create_guardian_player_link_request(body: GuardianPlayerLinkRequestCreate, db: Session = Depends(get_db)):
+    guardian = db.query(models.User).filter(models.User.id == body.guardianId).first()
+    if not guardian or not has_user_role(guardian, 'guardian'):
+        raise HTTPException(status_code=400, detail="Only guardian accounts can request player link approvals")
+
+    player_email = (body.playerEmail or "").strip().lower()
+    player = db.query(models.User).filter(models.User.email == player_email).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player account not found")
+    if not has_user_role(player, 'player'):
+        raise HTTPException(status_code=400, detail="This email does not belong to a player account")
+    if player.guardian_id == guardian.id:
+        return {"ok": True, "alreadyLinked": True, "message": "This player is already linked to this guardian account"}
+    if player.guardian_id and player.guardian_id != guardian.id:
+        other_guardian = db.query(models.User).filter(models.User.id == player.guardian_id).first()
+        raise HTTPException(status_code=400, detail=f"This player is already linked to another guardian: {other_guardian.email if other_guardian else 'another guardian'}")
+
+    existing = (
+        db.query(models.GuardianPlayerLinkRequest)
+        .filter(
+            models.GuardianPlayerLinkRequest.guardian_id == guardian.id,
+            models.GuardianPlayerLinkRequest.player_id == player.id,
+            models.GuardianPlayerLinkRequest.status == 'pending',
+        )
+        .order_by(models.GuardianPlayerLinkRequest.created_at.desc())
+        .first()
+    )
+    if existing:
+        expires_at = parse_iso_datetime(existing.expires_at)
+        if expires_at and expires_at > datetime.utcnow():
+            return {"ok": True, "alreadyRequested": True, "message": f"A confirmation email has already been sent to {player.email}"}
+        existing.status = 'expired'
+
+    token = uuid.uuid4().hex
+    now = datetime.utcnow()
+    expiry = now + timedelta(hours=24)
+    req = models.GuardianPlayerLinkRequest(
+        id=f"gpl_{uuid.uuid4().hex[:8]}",
+        guardian_id=guardian.id,
+        player_id=player.id,
+        token=token,
+        status='pending',
+        created_at=now.isoformat(),
+        expires_at=expiry.isoformat(),
+    )
+    db.add(req)
+    db.commit()
+
+    confirm_url = f"{APP_BASE_URL}/api/guardian_link_confirm?token={token}"
+    send_guardian_link_request_email(player.email, player.name or 'Player', guardian.name or guardian.email, confirm_url)
+    return {"ok": True, "message": f"A confirmation email was sent to {player.email}"}
+
+
+@app.get("/api/guardian_link_confirm")
+def confirm_guardian_player_link(token: str, db: Session = Depends(get_db)):
+    req = db.query(models.GuardianPlayerLinkRequest).filter(models.GuardianPlayerLinkRequest.token == token).first()
+    if not req:
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#ef4444">❌ 绑定确认链接无效或已过期</h2>
+        <p>The guardian link is invalid or has expired.</p>
+        </body></html>
+        """, status_code=400)
+
+    if req.status != 'pending':
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#16a34a">✅ 绑定已处理</h2>
+        <p>This guardian link has already been processed.</p>
+        </body></html>
+        """)
+
+    expires_at = parse_iso_datetime(req.expires_at)
+    if not expires_at or expires_at <= datetime.utcnow():
+        req.status = 'expired'
+        db.commit()
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#ef4444">❌ 绑定确认已过期</h2>
+        <p>The guardian confirmation link has expired. Please request a new link.</p>
+        </body></html>
+        """, status_code=410)
+
+    guardian = db.query(models.User).filter(models.User.id == req.guardian_id).first()
+    player = db.query(models.User).filter(models.User.id == req.player_id).first()
+    if not guardian or not player:
+        req.status = 'expired'
+        db.commit()
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#ef4444">❌ 绑定信息不存在</h2>
+        <p>The guardian or player account no longer exists.</p>
+        </body></html>
+        """, status_code=404)
+
+    if player.guardian_id and player.guardian_id != guardian.id:
+        req.status = 'rejected'
+        db.commit()
+        return HTMLResponse("""
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2 style="color:#ef4444">❌ 该球员已绑定其他监护人</h2>
+        <p>This player is already linked to another guardian.</p>
+        </body></html>
+        """, status_code=409)
+
+    player.guardian_id = guardian.id
+    guardian.role = append_user_role(guardian.role, 'guardian')
+    req.status = 'confirmed'
+    db.commit()
+    return HTMLResponse(f"""
+    <html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#f8fafc">
+    <div style="max-width:420px;margin:auto;background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <div style="font-size:48px">✅</div>
+      <h2 style="color:#16a34a;margin-top:16px">绑定确认成功</h2>
+      <p>{guardian.name or guardian.email} 已成功关联到 {player.name or player.email}。</p>
+      <p style="color:#64748b;font-size:13px;margin-top:24px">你现在可以返回 App 继续使用。</p>
+    </div></body></html>
+    """)
 
 _INVALID_PWD_RE_INLINE = re.compile(r'[ <>\'"]')
 

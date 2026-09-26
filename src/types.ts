@@ -9,6 +9,8 @@ export interface User {
   role: AppRole;
   availableRoles: AppRole[];
   name: string;
+  firstName: string | null;
+  lastName: string | null;
   email: string;
   phone: string | null;
   dob: string | null;
@@ -19,6 +21,7 @@ export interface User {
   defaultLocation: string | null;
   defaultClubId: string | null;
   gamesPlayedCount: number;
+  jerseyNumber: string | null;
 }
 
 export interface Game {

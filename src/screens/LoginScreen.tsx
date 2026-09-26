@@ -2,7 +2,7 @@
  * 登录 / 注册页面 (Login & Register Screen)
  * 对应 App.jsx 的 LoginScreen 组件
  */
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -52,7 +52,9 @@ function normalizeEmailCode(v: string): string {
 export default function LoginScreen({ onLogin }: Props) {
   const { t } = useLanguage();
   const [tab, setTab] = useState<"login" | "register">("login");
-  const [regRole, setRegRole] = useState<"player" | "coach">("player");
+  const [regRole, setRegRole] = useState<"player" | "coach" | "guardian">(
+    "player",
+  );
 
   // Login
   const [email, setEmail] = useState("");
@@ -309,7 +311,7 @@ export default function LoginScreen({ onLogin }: Props) {
       !regName.trim() ||
       !regEmail.trim() ||
       !regPassword.trim() ||
-      !regCode.trim()
+      (regRole !== "guardian" && !regCode.trim())
     ) {
       setRegError(t("errFillAll"));
       return;
@@ -359,7 +361,9 @@ export default function LoginScreen({ onLogin }: Props) {
     const endpoint =
       regRole === "coach"
         ? `${API_BASE_URL}/register_coach`
-        : `${API_BASE_URL}/register`;
+        : regRole === "guardian"
+          ? `${API_BASE_URL}/register_guardian`
+          : `${API_BASE_URL}/register`;
     const payload =
       regRole === "coach"
         ? {
@@ -372,23 +376,30 @@ export default function LoginScreen({ onLogin }: Props) {
             phone: regPhone.trim() || null,
             clubName: regClubName.trim() || null,
           }
-        : {
-            name: regName.trim(),
-            email: regEmail.trim(),
-            password: regPassword,
-            inviteCode: regCode.trim(),
-            emailCode: normalizeEmailCode(emailCode),
-            dob: regDob || null,
-            phone: regPhone.trim() || null,
-            ...(needsGuardian
-              ? {
-                  guardianName: guardianName.trim(),
-                  guardianEmail: guardianEmail.trim(),
-                  guardianPassword,
-                  guardianEmailCode: normalizeEmailCode(guardianEmailCode),
-                }
-              : {}),
-          };
+        : regRole === "guardian"
+          ? {
+              name: regName.trim(),
+              email: regEmail.trim(),
+              password: regPassword,
+              emailCode: normalizeEmailCode(emailCode),
+            }
+          : {
+              name: regName.trim(),
+              email: regEmail.trim(),
+              password: regPassword,
+              inviteCode: regCode.trim(),
+              emailCode: normalizeEmailCode(emailCode),
+              dob: regDob || null,
+              phone: regPhone.trim() || null,
+              ...(needsGuardian
+                ? {
+                    guardianName: guardianName.trim(),
+                    guardianEmail: guardianEmail.trim(),
+                    guardianPassword,
+                    guardianEmailCode: normalizeEmailCode(guardianEmailCode),
+                  }
+                : {}),
+            };
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -887,6 +898,35 @@ export default function LoginScreen({ onLogin }: Props) {
                   {t("coachRole")}
                 </Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.roleBtn,
+                  regRole === "guardian" && styles.roleBtnGreen,
+                ]}
+                onPress={() => {
+                  setRegRole("guardian");
+                  setRegCode("");
+                  setRegError("");
+                  setGuardianName("");
+                  setGuardianEmail("");
+                  setGuardianPassword("");
+                  setGuardianEmailCode("");
+                  setGuardianCodeSent(false);
+                  setGuardianCodeError("");
+                  setEmailCode("");
+                  setCodeSent(false);
+                  setCodeError("");
+                }}
+              >
+                <Text
+                  style={[
+                    styles.roleBtnText,
+                    regRole === "guardian" && { color: "#fff" },
+                  ]}
+                >
+                  {t("guardianRole")}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <Text style={styles.label}>
@@ -997,51 +1037,55 @@ export default function LoginScreen({ onLogin }: Props) {
               autoComplete="name"
             />
 
-            <Text style={[styles.label, { marginTop: 12 }]}>
-              {t("labelDob")} *
-            </Text>
-            <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
-              <TextInput
-                style={[styles.input, { flex: 2 }]}
-                value={dobYear}
-                onChangeText={(v) => {
-                  const s = v.replace(/\D/g, "").slice(0, 4);
-                  setDobYear(s);
-                  updateDob(s, dobMonth, dobDay);
-                }}
-                keyboardType="number-pad"
-                maxLength={4}
-                placeholder={t("dobYearPlaceholder") || "YYYY"}
-                placeholderTextColor={C.slate400}
-              />
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                value={dobMonth}
-                onChangeText={(v) => {
-                  const s = v.replace(/\D/g, "").slice(0, 2);
-                  setDobMonth(s);
-                  updateDob(dobYear, s, dobDay);
-                }}
-                keyboardType="number-pad"
-                maxLength={2}
-                placeholder={t("dobMonthPlaceholder") || "MM"}
-                placeholderTextColor={C.slate400}
-              />
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                value={dobDay}
-                onChangeText={(v) => {
-                  const s = v.replace(/\D/g, "").slice(0, 2);
-                  setDobDay(s);
-                  updateDob(dobYear, dobMonth, s);
-                }}
-                keyboardType="number-pad"
-                maxLength={2}
-                placeholder={t("dobDayPlaceholder") || "DD"}
-                placeholderTextColor={C.slate400}
-              />
-            </View>
-            {playerAge !== null && (
+            {regRole !== "guardian" && (
+              <>
+                <Text style={[styles.label, { marginTop: 12 }]}>
+                  {t("labelDob")} *
+                </Text>
+                <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
+                  <TextInput
+                    style={[styles.input, { flex: 2 }]}
+                    value={dobYear}
+                    onChangeText={(v) => {
+                      const s = v.replace(/\D/g, "").slice(0, 4);
+                      setDobYear(s);
+                      updateDob(s, dobMonth, dobDay);
+                    }}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    placeholder={t("dobYearPlaceholder") || "YYYY"}
+                    placeholderTextColor={C.slate400}
+                  />
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={dobMonth}
+                    onChangeText={(v) => {
+                      const s = v.replace(/\D/g, "").slice(0, 2);
+                      setDobMonth(s);
+                      updateDob(dobYear, s, dobDay);
+                    }}
+                    keyboardType="number-pad"
+                    maxLength={2}
+                    placeholder={t("dobMonthPlaceholder") || "MM"}
+                    placeholderTextColor={C.slate400}
+                  />
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    value={dobDay}
+                    onChangeText={(v) => {
+                      const s = v.replace(/\D/g, "").slice(0, 2);
+                      setDobDay(s);
+                      updateDob(dobYear, dobMonth, s);
+                    }}
+                    keyboardType="number-pad"
+                    maxLength={2}
+                    placeholder={t("dobDayPlaceholder") || "DD"}
+                    placeholderTextColor={C.slate400}
+                  />
+                </View>
+              </>
+            )}
+            {regRole !== "guardian" && playerAge !== null && (
               <Text
                 style={[
                   styles.hint,
@@ -1182,23 +1226,26 @@ export default function LoginScreen({ onLogin }: Props) {
               </>
             )}
 
-            <Text style={[styles.label, { marginTop: 12 }]}>
-              {regRole === "coach"
-                ? t("labelCoachRegCode")
-                : t("labelPlayerInviteCode")}{" "}
-              *
-            </Text>
-            <TextInput
-              style={[styles.input, styles.codeInput]}
-              value={regCode}
-              onChangeText={(v) => setRegCode(v.toUpperCase())}
-              placeholder="XXXXXXXX"
-              maxLength={8}
-              autoCapitalize="characters"
-            />
-            <Text style={styles.hint}>
-              {regRole === "coach" ? t("hintCoachCode") : t("hintPlayerCode")}
-            </Text>
+            {regRole !== "guardian" && (
+              <>
+                <Text style={[styles.label, { marginTop: 12 }]}>
+                  {regRole === "coach"
+                    ? t("labelCoachRegCode")
+                    : t("labelPlayerInviteCode")} *
+                </Text>
+                <TextInput
+                  style={[styles.input, styles.codeInput]}
+                  value={regCode}
+                  onChangeText={(v) => setRegCode(v.toUpperCase())}
+                  placeholder="XXXXXXXX"
+                  maxLength={8}
+                  autoCapitalize="characters"
+                />
+                <Text style={styles.hint}>
+                  {regRole === "coach" ? t("hintCoachCode") : t("hintPlayerCode")}
+                </Text>
+              </>
+            )}
 
             {!!regError && <Text style={styles.errorText}>⚠ {regError}</Text>}
 
@@ -1366,6 +1413,7 @@ const styles = StyleSheet.create({
   },
   roleBtnBlue: { backgroundColor: C.blue },
   roleBtnPurple: { backgroundColor: C.purple },
+  roleBtnGreen: { backgroundColor: C.green },
   roleBtnText: { fontSize: 13, fontWeight: "600", color: C.slate500 },
   codeInput: {
     fontFamily:

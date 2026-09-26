@@ -28,6 +28,7 @@ import {
 import React, { useState } from "react";
 import {
   Alert,
+  Dimensions,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -42,6 +43,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   apiFetch,
+  formatUserDisplayName,
   mapClub,
   mapGame,
   mapMatchApp,
@@ -71,6 +73,59 @@ import {
   TeamGroup,
   User as UserType,
 } from "../types";
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
+
+// Tap a (possibly nicknamed) player name to reveal their real full name in a floating tooltip.
+function NameRevealText({
+  displayText,
+  fullName,
+  textStyle,
+  numberOfLines,
+}: {
+  displayText: string;
+  fullName: string;
+  textStyle?: any;
+  numberOfLines?: number;
+}) {
+  const { t } = useLanguage();
+  const [tooltip, setTooltip] = useState<{ x: number; y: number } | null>(null);
+
+  const reveal = (e: any) => {
+    const { pageX, pageY } = e.nativeEvent;
+    setTooltip({ x: pageX, y: pageY });
+  };
+  const hide = () => setTooltip(null);
+
+  return (
+    <>
+      <TouchableOpacity onPress={reveal} activeOpacity={0.6}>
+        <Text style={textStyle} numberOfLines={numberOfLines}>
+          {displayText}
+        </Text>
+      </TouchableOpacity>
+      {tooltip && (
+        <Modal transparent visible animationType="fade" onRequestClose={hide}>
+          <View style={StyleSheet.absoluteFill} onTouchStart={hide}>
+            <View
+              style={[
+                s.nameTooltip,
+                {
+                  left: Math.max(8, Math.min(tooltip.x, SCREEN_WIDTH - 168)),
+                  top: tooltip.y + 14,
+                },
+              ]}
+            >
+              <Text style={s.nameTooltipText}>
+                {t("playerFullNameToast").replace("{name}", fullName)}
+              </Text>
+            </View>
+          </View>
+        </Modal>
+      )}
+    </>
+  );
+}
 
 interface CoachState {
   currentUser: UserType;
@@ -145,7 +200,8 @@ function CoachProfileScreen({
   const insets = useSafeAreaInsets();
   const { t } = useLanguage();
   const [phone, setPhone] = React.useState(currentUser.phone ?? "");
-  const [name, setName] = React.useState(currentUser.name ?? "");
+  const [firstName, setFirstName] = React.useState(currentUser.firstName ?? "");
+  const [lastName, setLastName] = React.useState(currentUser.lastName ?? "");
   const [location, setLocation] = React.useState(
     currentUser.defaultLocation ?? "",
   );
@@ -195,8 +251,9 @@ function CoachProfileScreen({
   };
 
   const save = async () => {
-    const normalizedName = name.trim();
-    if (!normalizedName) {
+    const normalizedFirstName = firstName.trim();
+    const normalizedLastName = lastName.trim();
+    if (!normalizedFirstName && !normalizedLastName) {
       showToast(t("nameRequired"));
       return;
     }
@@ -210,7 +267,8 @@ function CoachProfileScreen({
       const data = await apiFetch(`/users/${currentUser.id}/profile`, {
         method: "PUT",
         body: {
-          name: normalizedName,
+          firstName: normalizedFirstName || null,
+          lastName: normalizedLastName || null,
           phone: normalizedPhone || null,
           defaultLocation: location.trim() || null,
           defaultClubId: clubId || null,
@@ -219,7 +277,9 @@ function CoachProfileScreen({
       });
       setCurrentUser((prev: any) => ({
         ...prev,
-        name: data.name || prev.name,
+        name: formatUserDisplayName(data) || prev.name,
+        firstName: data.first_name ?? data.firstName ?? prev.firstName ?? null,
+        lastName: data.last_name ?? data.lastName ?? prev.lastName ?? null,
         phone: data.phone || null,
         defaultLocation: data.default_location || null,
         defaultClubId: data.default_club_id || null,
@@ -344,15 +404,15 @@ function CoachProfileScreen({
             {t("profileBasicInfo")}
           </Text>
           <View>
-            <Text style={s.fieldLabel}>{t("labelFullName")}</Text>
+            <Text style={s.fieldLabel}>{t("profileFirstName")}</Text>
             <View style={[s.searchRow, { marginBottom: 0 }]}>
               <User size={15} color={C.slate400} />
               <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
               <TextInput
                 style={[s.searchInput, { paddingTop: 0 }]}
-                value={name}
-                onChangeText={setName}
-                placeholder={t("labelFullName")}
+                value={firstName}
+                onChangeText={setFirstName}
+                placeholder={t("profileFirstNamePlaceholder")}
                 placeholderTextColor={C.slate400}
               />
                 <View style={s.countBadge}>
@@ -361,6 +421,19 @@ function CoachProfileScreen({
                   </Text>
                 </View>
               </View>
+            </View>
+          </View>
+          <View>
+            <Text style={s.fieldLabel}>{t("profileLastName")}</Text>
+            <View style={[s.searchRow, { marginBottom: 0 }]}> 
+              <User size={15} color={C.slate400} />
+              <TextInput
+                style={[s.searchInput, { paddingTop: 0 }]}
+                value={lastName}
+                onChangeText={setLastName}
+                placeholder={t("profileLastNamePlaceholder")}
+                placeholderTextColor={C.slate400}
+              />
             </View>
           </View>
           <View>
@@ -399,7 +472,7 @@ function CoachProfileScreen({
               <MapPin size={15} color={C.slate400} />
               <TextInput
                 style={s.searchInput}
-                placeholder="e.g. City Sports Center"
+                placeholder={t("profileLocationPlaceholder")}
                 placeholderTextColor={C.slate400}
                 value={location}
                 onChangeText={setLocation}
@@ -466,7 +539,7 @@ function CoachProfileScreen({
                         !clubId && s.dropdownItemTextActive,
                       ]}
                     >
-                      不设置
+                      {t("clubNotSet")}
                     </Text>
                   </TouchableOpacity>
                   {clubs.map((c) => (
@@ -1141,15 +1214,15 @@ export default function CoachScreen({ state }: { state: CoachState }) {
             const expanded = expandedHistoryIds.has(historyGame.id);
             const historyCardBg =
               resultValue === "win"
-                ? "#f0fdf4"
+                ? "#bbf7d0"
                 : resultValue === "lose"
-                  ? "#fef2f2"
+                  ? "#fecaca"
                   : C.slate50;
             const historyCardBorder =
               resultValue === "win"
-                ? "#86efac"
+                ? "#4ade80"
                 : resultValue === "lose"
-                  ? "#fca5a5"
+                  ? "#f87171"
                   : C.slate200;
             const teamsSummary = `vs ${opponentClub?.name ?? "—"}`;
             return (
@@ -1166,14 +1239,13 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                   activeOpacity={0.7}
                 >
                   <Text style={s.historyTitle}>
-                    {sportEmoji(historyGame.sport)}
+                    {sportEmoji(historyGame.sport)} {teamsSummary}
                   </Text>
                   <Text style={{ color: C.slate500, fontSize: 12 }}>
                     {expanded ? "▲" : "▼"}
                   </Text>
                 </TouchableOpacity>
                 <Text style={s.hintText}>{fmtDateTime(historyGame.time)}</Text>
-                <Text style={s.hintText}>{teamsSummary}</Text>
 
                 {expanded && (
                   <>
@@ -4114,16 +4186,22 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                         <User size={14} color={C.slate400} />
                                       </View>
                                       <View>
-                                        <Text
-                                          style={{
+                                        <NameRevealText
+                                          displayText={playerDisplayName}
+                                          fullName={player?.name ?? ""}
+                                          textStyle={{
                                             fontWeight: "600",
                                             color: C.slate800,
                                             fontSize: 13,
                                           }}
-                                        >
-                                          {playerDisplayName}
+                                          numberOfLines={1}
+                                        />
+                                        <Text style={s.subText}>
+                                          {player?.email}
+                                          {player?.jerseyNumber
+                                            ? `  \u00b7  #${player.jerseyNumber}`
+                                            : ""}
                                         </Text>
-                                        <Text style={s.subText}>{player?.email}</Text>
                                       </View>
                                     </View>
                                     <View style={{ flexDirection: "row", gap: 4 }}>
@@ -4193,15 +4271,16 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                       <User size={14} color={C.slate400} />
                                     </View>
                                     <View>
-                                      <Text
-                                        style={{
+                                      <NameRevealText
+                                        displayText={truncateOfflinePlayerName(offlineDisplayName)}
+                                        fullName={op.name}
+                                        textStyle={{
                                           fontWeight: "600",
                                           color: C.slate800,
                                           fontSize: 13,
                                         }}
-                                      >
-                                        {offlineDisplayName}
-                                      </Text>
+                                        numberOfLines={1}
+                                      />
                                       <Text
                                         style={[s.subText, { color: C.slate400 }]}
                                       >
@@ -4546,6 +4625,11 @@ function parseSports(sport: string | null): string[] {
     .map((s) => normalizeSportName(s))
     .filter(Boolean);
   return Array.from(new Set(normalized));
+}
+
+function truncateOfflinePlayerName(name: string): string {
+  const characters = Array.from(name);
+  return characters.length > 9 ? `${characters.slice(0, 9).join("")}...` : name;
 }
 
 function isValidPhoneNumber(phone: string): boolean {
@@ -5330,6 +5414,8 @@ function GameManagementCard({
       type InviteCandidate = {
         id: string;
         name: string;
+        fullName: string;
+        jerseyNumber: string | null;
         isOffline: boolean;
         rosterEntry?: RosterEntry;
       };
@@ -5348,6 +5434,8 @@ function GameManagementCard({
                 pid,
                 users.find((u) => u.id === pid)?.name,
               ),
+              fullName: users.find((u) => u.id === pid)?.name ?? "",
+              jerseyNumber: users.find((u) => u.id === pid)?.jerseyNumber ?? null,
               isOffline: false,
               rosterEntry: rosterByPlayerId.get(pid),
             })),
@@ -5359,6 +5447,8 @@ function GameManagementCard({
                 p.id,
                 p.name,
               ),
+              fullName: p.name,
+              jerseyNumber: null,
               isOffline: true,
               rosterEntry: rosterByPlayerId.get(p.id),
             })),
@@ -5442,11 +5532,12 @@ function GameManagementCard({
           accountPlayers.forEach(({ id }) => {
             sendAppNotification(
               id,
-              `\ud83c\udfc5 ${t("notifGameInvitationTitle")}`,
-              t("notifBodyGameInvitation")
-                .replace("{coach}", currentUser.name)
-                .replace("{gameLabel}", gameLabel)
-                .replace("{time}", new Date(game.time).toLocaleString()),
+              `🏅 ${notifI18n("notifGameInvitationTitle")}`,
+              notifI18n("notifBodyGameInvitation", {
+                coach: currentUser.name,
+                gameLabel,
+                time: game.time,
+              }),
             );
           });
 
@@ -5512,15 +5603,20 @@ function GameManagementCard({
                   selectedCandidates.map((p) => (
                     <View key={p.id} style={s.participationRow}>
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text
-                          style={{
+                        <NameRevealText
+                          displayText={p.isOffline ? truncateOfflinePlayerName(p.name) : p.name}
+                          fullName={p.fullName}
+                          textStyle={{
                             fontWeight: "600",
                             color: p.isOffline ? C.slate700 : C.slate800,
                           }}
                           numberOfLines={1}
-                        >
-                          {p.name}
-                        </Text>
+                        />
+                        {!!p.jerseyNumber && (
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            #{p.jerseyNumber}
+                          </Text>
+                        )}
                         {p.isOffline && (
                           <Text style={{ fontSize: 10, color: C.slate500 }}>
                             {t("offlineNoAccountLabel")}
@@ -5552,15 +5648,20 @@ function GameManagementCard({
                   outCandidates.map((p) => (
                     <View key={p.id} style={s.participationRow}>
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text
-                          style={{
+                        <NameRevealText
+                          displayText={p.isOffline ? truncateOfflinePlayerName(p.name) : p.name}
+                          fullName={p.fullName}
+                          textStyle={{
                             fontWeight: "600",
                             color: p.isOffline ? C.slate700 : C.slate800,
                           }}
                           numberOfLines={1}
-                        >
-                          {p.name}
-                        </Text>
+                        />
+                        {!!p.jerseyNumber && (
+                          <Text style={{ fontSize: 10, color: C.slate500 }}>
+                            #{p.jerseyNumber}
+                          </Text>
+                        )}
                         {p.isOffline && (
                           <Text style={{ fontSize: 10, color: C.slate500 }}>
                             {t("offlineNoAccountLabel")}
@@ -5622,7 +5723,7 @@ function GameManagementCard({
         onPress={() => onToggleExpand(!expanded)}
         activeOpacity={0.7}
       >
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={s.cardTitle}>
             {game.status === "locked"
               ? `${sportEmoji(game.sport)} VS ${opponentGroupClub?.name ?? opponentCoach?.name ?? t("pendingLabel")} - looking for ${game.ageGroup} (${titleTimeText})`
@@ -6045,12 +6146,26 @@ function GameManagementCard({
                         p.playerId,
                         basePlayerName,
                       );
+                    const playerJerseyNumber = users.find(
+                      (u) => u.id === p.playerId,
+                    )?.jerseyNumber;
                     return (
                       <View key={p.id} style={s.participationRow}>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ fontWeight: "600", color: C.slate700 }}>
-                            {playerName}
-                          </Text>
+                          <NameRevealText
+                              displayText={
+                                offlinePlayersById.has(p.playerId)
+                                  ? truncateOfflinePlayerName(playerName)
+                                  : playerName
+                              }
+                            fullName={basePlayerName}
+                            textStyle={{ fontWeight: "600", color: C.slate700 }}
+                          />
+                          {!!playerJerseyNumber && (
+                            <Text style={{ fontSize: 10, color: C.slate500 }}>
+                              #{playerJerseyNumber}
+                            </Text>
+                          )}
                           {p.status === "pending_coach" && (
                             <Text style={{ fontSize: 10, color: "#c2410c" }}>
                               {t("pendingCoachLabel")}
@@ -6102,9 +6217,11 @@ function GameManagementCard({
                     return (
                       <View key={p.id} style={s.participationRow}>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ fontWeight: "600", color: C.slate700 }}>
-                            {playerName}
-                          </Text>
+                          <NameRevealText
+                            displayText={truncateOfflinePlayerName(playerName)}
+                            fullName={p.name}
+                            textStyle={{ fontWeight: "600", color: C.slate700 }}
+                          />
                           <Text style={{ fontSize: 10, color: C.slate500 }}>
                             {t("offlineNoAccountLabel")}
                           </Text>
@@ -6151,12 +6268,22 @@ function GameManagementCard({
                         p.playerId,
                         basePlayerName,
                       );
+                    const playerJerseyNumber = users.find(
+                      (u) => u.id === p.playerId,
+                    )?.jerseyNumber;
                     return (
                       <View key={p.id} style={s.participationRow}>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ fontWeight: "600", color: C.slate800 }}>
-                            {playerName}
-                          </Text>
+                          <NameRevealText
+                            displayText={playerName}
+                            fullName={basePlayerName}
+                            textStyle={{ fontWeight: "600", color: C.slate800 }}
+                          />
+                          {!!playerJerseyNumber && (
+                            <Text style={{ fontSize: 10, color: C.slate500 }}>
+                              #{playerJerseyNumber}
+                            </Text>
+                          )}
                         </View>
                         <View style={s.participationActions}>
                           <TouchableOpacity
@@ -6188,9 +6315,11 @@ function GameManagementCard({
                     return (
                       <View key={p.id} style={s.participationRow}>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={{ fontWeight: "600", color: C.slate800 }}>
-                            {playerName}
-                          </Text>
+                          <NameRevealText
+                            displayText={truncateOfflinePlayerName(playerName)}
+                            fullName={p.name}
+                            textStyle={{ fontWeight: "600", color: C.slate800 }}
+                          />
                           <Text style={{ fontSize: 10, color: C.slate500 }}>
                             {t("offlineNoAccountLabel")}
                           </Text>
@@ -6295,7 +6424,13 @@ const s = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
-  cardTitle: { fontSize: 16, fontWeight: "bold", color: C.slate800, flex: 1 },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: C.slate800,
+    flex: 1,
+    flexShrink: 1,
+  },
   cardMetaRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -6665,11 +6800,10 @@ const s = StyleSheet.create({
   },
   participationColumnsWrap: {
     marginTop: 8,
-    flexDirection: "row",
+    flexDirection: "column",
     gap: 8,
   },
   participatingColumn: {
-    flex: 1,
     borderWidth: 1,
     borderColor: "#bbf7d0",
     backgroundColor: "#f0fdf4",
@@ -6678,7 +6812,6 @@ const s = StyleSheet.create({
     gap: 6,
   },
   nonParticipatingColumn: {
-    flex: 1,
     borderWidth: 1,
     borderColor: "#fecaca",
     backgroundColor: "#fef2f2",
@@ -6841,5 +6974,25 @@ const s = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     color: C.slate800,
+  },
+  nameTooltip: {
+    position: "absolute",
+    backgroundColor: C.white,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    maxWidth: 220,
+    borderWidth: 1,
+    borderColor: C.slate200,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  nameTooltipText: {
+    fontSize: 13,
+    color: C.slate800,
+    fontWeight: "600",
   },
 });

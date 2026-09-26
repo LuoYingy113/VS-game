@@ -13,6 +13,44 @@ import {
 
 const KNOWN_ROLES: AppRole[] = ["coach", "player", "guardian", "admin"];
 
+const MAX_SURNAME_LEN = 9;
+
+export const formatUserDisplayName = (u: any): string => {
+  const rawFirst = (u?.first_name ?? u?.firstName ?? "").toString().trim();
+  const rawLast = (u?.last_name ?? u?.lastName ?? "").toString().trim();
+  const fallbackName = (u?.name ?? "").toString().trim();
+
+  let first = rawFirst;
+  let last = rawLast;
+
+  if (!last && first) {
+    const parts = first.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      first = parts[0];
+      last = parts.slice(1).join(" ");
+    }
+  }
+
+  if (!last && fallbackName) {
+    const parts = fallbackName.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      first = first || parts[0];
+      last = parts.slice(1).join(" ");
+    }
+  }
+
+  if (last) {
+    const clippedLast =
+      last.length > MAX_SURNAME_LEN
+        ? `${last.slice(0, MAX_SURNAME_LEN)}...`
+        : last;
+    const initial = first ? `${first.charAt(0).toUpperCase()}.` : "";
+    return initial ? `${clippedLast} ${initial}` : clippedLast;
+  }
+
+  return first || fallbackName;
+};
+
 function parseUserRoles(rawRole: unknown): AppRole[] {
   const rawTokens = Array.isArray(rawRole)
     ? rawRole.map((v) => String(v))
@@ -95,11 +133,16 @@ export const mapUser = (u: any): User => {
   const availableRoles = Array.from(
     new Set([...rolesFromAvailable, ...rolesFromRole]),
   );
+  const firstName = (u.first_name ?? u.firstName ?? "").toString().trim();
+  const lastName = (u.last_name ?? u.lastName ?? "").toString().trim();
+  const displayName = formatUserDisplayName(u);
   return {
     id: u.id,
     role: availableRoles[0] || "player",
     availableRoles: availableRoles.length > 0 ? availableRoles : ["player"],
-    name: u.name,
+    name: displayName,
+    firstName: firstName || null,
+    lastName: lastName || null,
     email: u.email,
     phone: u.phone || null,
     dob: u.dob || null,
@@ -110,6 +153,7 @@ export const mapUser = (u: any): User => {
     defaultLocation: u.default_location || null,
     defaultClubId: u.default_club_id || null,
     gamesPlayedCount: Number(u.games_played_count ?? 0) || 0,
+    jerseyNumber: u.jersey_number ?? u.jerseyNumber ?? null,
   };
 };
 

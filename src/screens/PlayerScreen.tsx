@@ -3,7 +3,7 @@
  * 对应 App.jsx 的 PlayerView
  */
 import { Calendar, Mail } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -18,7 +18,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { apiFetch, calculateAge, mapTeamGroup } from "../api";
+import { apiFetch, calculateAge, mapTeamGroup, mapUser } from "../api";
 import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
 import { AppModal, C, NavBtn } from "../components/shared";
 import { useLanguage } from "../i18n";
@@ -71,7 +71,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
   const [modal, setModal] = useState<ModalConfig | null>(null);
   const [joinInviteCode, setJoinInviteCode] = useState("");
   const [joiningTeam, setJoiningTeam] = useState(false);
-  const [joinedTeamsExpanded, setJoinedTeamsExpanded] = useState(false);
   const autoHandledInviteIdsRef = React.useRef<Set<string>>(new Set());
 
   const myRosters = rosters.filter((r) => r.playerId === currentUser.id);
@@ -82,12 +81,49 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
       r.status === "pending_coach" ||
       r.status === "pending_guardian",
   );
+  const upcomingActiveGames = activeGames.filter((r) => {
+    const game = games.find((g) => g.id === r.gameId);
+    if (!game) return false;
+    const gameTs = Date.parse(game.time);
+    if (Number.isNaN(gameTs)) return true;
+    return gameTs >= Date.now();
+  });
 
   const age = calculateAge(currentUser.dob);
 
   const joinedTeams = teamGroups.filter((tg) =>
     tg.playerIds.includes(currentUser.id),
   );
+  const boundGuardian = currentUser.guardianId
+    ? users.find((u) => u.id === currentUser.guardianId) ?? null
+    : null;
+  const [profileFirstName, setProfileFirstName] = useState(currentUser.firstName ?? "");
+  const [profileLastName, setProfileLastName] = useState(currentUser.lastName ?? "");
+  const [profileEmail, setProfileEmail] = useState(currentUser.email || "");
+  const [profilePhone, setProfilePhone] = useState(currentUser.phone ?? "");
+  const [profileJerseyNumber, setProfileJerseyNumber] = useState(
+    currentUser.jerseyNumber ?? "",
+  );
+  const [profileDob, setProfileDob] = useState(currentUser.dob ?? "");
+  const [profileSaving, setProfileSaving] = useState(false);
+
+  useEffect(() => {
+    if (!playerProfileOpen) return;
+    setProfileFirstName(currentUser.firstName ?? "");
+    setProfileLastName(currentUser.lastName ?? "");
+    setProfileEmail(currentUser.email || "");
+    setProfilePhone(currentUser.phone ?? "");
+    setProfileJerseyNumber(currentUser.jerseyNumber ?? "");
+    setProfileDob(currentUser.dob ?? "");
+  }, [
+    playerProfileOpen,
+    currentUser.firstName,
+    currentUser.lastName,
+    currentUser.email,
+    currentUser.phone,
+    currentUser.jerseyNumber,
+    currentUser.dob,
+  ]);
 
   const handleJoinTeamByInvite = async () => {
     const code = joinInviteCode.trim().toUpperCase();
@@ -330,6 +366,40 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     ]);
   };
 
+  const handleSaveProfile = async () => {
+    const nextFirstName = profileFirstName.trim();
+    const nextLastName = profileLastName.trim();
+    const nextEmail = profileEmail.trim().toLowerCase();
+    if (!nextFirstName && !nextLastName) {
+      showToast(t("nameRequired"));
+      return;
+    }
+    if (!nextEmail || !nextEmail.includes("@")) {
+      showToast(t("errInvalidEmailAddress"));
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      const data = await apiFetch(`/users/${currentUser.id}/profile`, {
+        method: "PUT",
+        body: {
+          firstName: nextFirstName || null,
+          lastName: nextLastName || null,
+          email: nextEmail,
+          phone: profilePhone.trim() || null,
+          jerseyNumber: profileJerseyNumber.trim() || null,
+          dob: profileDob.trim() || null,
+        },
+      });
+      setCurrentUser(mapUser(data));
+      showToast(t("profileSaved"));
+    } catch (err: any) {
+      showToast("Failed: " + err.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
   const handleAddGameToCalendar = async (game: Game, displayName: string) => {
     try {
       const result = await addMatchToSystemCalendar({
@@ -365,72 +435,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
   };
 
   const insets = useSafeAreaInsets();
-  const PlayerProfileScreen = () => (
-    <Modal
-      visible={playerProfileOpen}
-      animationType="slide"
-      onRequestClose={() => setPlayerProfileOpen(false)}
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: C.slate50 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-        <View
-          style={{
-            paddingTop: insets.top + 8,
-            paddingHorizontal: 20,
-            paddingBottom: 12,
-            backgroundColor: C.white,
-            borderBottomWidth: 1,
-            borderBottomColor: C.slate200,
-            flexDirection: "row",
-            alignItems: "center",
-          }}
-        >
-          <TouchableOpacity
-            onPress={() => setPlayerProfileOpen(false)}
-            hitSlop={12}
-            style={{ marginRight: 12 }}
-          >
-            <Text style={{ fontSize: 16, color: C.blue }}>{t("profileBack")}</Text>
-          </TouchableOpacity>
-          <Text
-            style={{
-              fontSize: 18,
-              fontWeight: "700",
-              color: C.slate800,
-              flex: 1,
-            }}
-          >
-            {t("profilePersonalInfo")}
-          </Text>
-        </View>
-
-        <ScrollView contentContainerStyle={{ padding: 20, gap: 14, paddingBottom: 60 }}>
-          <View style={s.card}>
-            <Text style={s.profileLabel}>{t("profileInfoBanner")}</Text>
-            <Text style={[s.profileValue, { marginTop: 8 }]}>{currentUser.name}</Text>
-            <Text style={s.metaText}>{currentUser.email}</Text>
-            <Text style={s.metaText}>
-              {t("ageYearsDisplay").replace("{age}", String(age))}
-            </Text>
-            {age < adminSettings.underageLimit && (
-              <View style={[s.underageBadge, { alignSelf: "flex-start", marginTop: 8 }]}>
-                <Text style={s.underageText}>{t("underageProfileBadge")}</Text>
-              </View>
-            )}
-          </View>
-
-          <TouchableOpacity
-            style={[s.btn, { backgroundColor: C.red }]}
-            onPress={handleDeleteAccount}
-          >
-            <Text style={s.btnText}>{t("deleteAccountBtn")}</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
 
   return (
     <KeyboardAvoidingView
@@ -522,12 +526,12 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
         {tab === "schedule" && (
           <View>
             <Text style={s.sectionTitle}>{t("myScheduleLabel")}</Text>
-            {activeGames.length === 0 && (
+            {upcomingActiveGames.length === 0 && (
               <View style={s.emptyBox}>
                 <Text style={s.emptyText}>{t("noUpcomingGames")}</Text>
               </View>
             )}
-            {activeGames.map((ag) => {
+            {upcomingActiveGames.map((ag) => {
               const game = games.find((g) => g.id === ag.gameId);
               if (!game) return null;
               const homeGroup = teamGroups.find(
@@ -679,64 +683,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           </View>
         )}
 
-        <View style={s.joinTeamBox}>
-          <Text style={s.joinTeamTitle}>{t("joinTeamTitle")}</Text>
-          <Text style={s.joinTeamHint}>{t("joinTeamHint")}</Text>
-          <View style={[s.searchRow, { marginTop: 8, marginBottom: 8 }]}> 
-            <TextInput
-              style={s.searchInput}
-              value={joinInviteCode}
-              onChangeText={setJoinInviteCode}
-              placeholder={t("joinTeamCodePlaceholder")}
-              placeholderTextColor={C.slate400}
-              autoCapitalize="characters"
-            />
-          </View>
-          <TouchableOpacity
-            style={[s.btn, joiningTeam && s.btnDisabled]}
-            onPress={handleJoinTeamByInvite}
-            disabled={joiningTeam}
-          >
-            <Text style={s.btnText}>
-              {joiningTeam ? t("loading") : t("joinTeamBtn")}
-            </Text>
-          </TouchableOpacity>
-          <Text style={s.joinedTeamsText}>
-            {t("joinedTeamsCount").replace(
-              "{count}",
-              String(joinedTeams.length),
-            )}
-          </Text>
-
-          <TouchableOpacity
-            style={s.joinedTeamsToggle}
-            onPress={() => setJoinedTeamsExpanded((v) => !v)}
-          >
-            <Text style={s.joinedTeamsToggleText}>
-              {joinedTeamsExpanded ? "▲" : "▼"} {t("teamLabel")}
-            </Text>
-          </TouchableOpacity>
-
-          {joinedTeamsExpanded && (
-            <View style={s.joinedTeamsList}>
-              {joinedTeams.length === 0 ? (
-                <Text style={s.hintText}>-</Text>
-              ) : (
-                joinedTeams.map((group) => {
-                  const coach = users.find((u) => u.id === group.coachId);
-                  return (
-                    <View key={group.id} style={s.joinedTeamRow}>
-                      <Text style={s.joinedTeamName}>{group.name}</Text>
-                      <Text style={s.joinedTeamCoach}>
-                        {t("coachRole")}: {coach?.name ?? "-"}
-                      </Text>
-                    </View>
-                  );
-                })
-              )}
-            </View>
-          )}
-        </View>
       </ScrollView>
 
       {/* Bottom nav */}
@@ -766,7 +712,193 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
       </View>
 
       <AppModal modal={modal} onClose={() => setModal(null)} />
-      <PlayerProfileScreen />
+      <Modal
+        visible={playerProfileOpen}
+        animationType="slide"
+        onRequestClose={() => setPlayerProfileOpen(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1, backgroundColor: C.slate50 }}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+          <View
+            style={{
+              paddingTop: insets.top + 8,
+              paddingHorizontal: 20,
+              paddingBottom: 12,
+              backgroundColor: C.white,
+              borderBottomWidth: 1,
+              borderBottomColor: C.slate200,
+              flexDirection: "row",
+              alignItems: "center",
+            }}
+          >
+            <TouchableOpacity
+              onPress={() => setPlayerProfileOpen(false)}
+              hitSlop={12}
+              style={{ marginRight: 12 }}
+            >
+              <Text style={{ fontSize: 16, color: C.blue }}>{t("profileBack")}</Text>
+            </TouchableOpacity>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "700",
+                color: C.slate800,
+                flex: 1,
+              }}
+            >
+              {t("profilePersonalInfo")}
+            </Text>
+          </View>
+
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 14, paddingBottom: 60 }}>
+            <View style={s.card}>
+              <Text style={s.profileLabel}>{t("profileInfoBanner")}</Text>
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("profileFirstName")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profileFirstName}
+                onChangeText={setProfileFirstName}
+                placeholder={t("profileFirstNamePlaceholder")}
+                placeholderTextColor={C.slate400}
+              />
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("profileLastName")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profileLastName}
+                onChangeText={setProfileLastName}
+                placeholder={t("profileLastNamePlaceholder")}
+                placeholderTextColor={C.slate400}
+              />
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelEmail")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profileEmail}
+                onChangeText={setProfileEmail}
+                placeholder={t("profileEmailPlaceholder")}
+                placeholderTextColor={C.slate400}
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelPhone")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profilePhone}
+                onChangeText={setProfilePhone}
+                placeholder="+1 555 0000"
+                placeholderTextColor={C.slate400}
+                keyboardType="phone-pad"
+              />
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelJerseyNumber")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profileJerseyNumber}
+                onChangeText={setProfileJerseyNumber}
+                placeholder={t("profileJerseyNumberPlaceholder")}
+                placeholderTextColor={C.slate400}
+              />
+
+              <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelDob")}</Text>
+              <TextInput
+                style={s.profileInput}
+                value={profileDob}
+                onChangeText={setProfileDob}
+                placeholder={t("profileDobPlaceholder")}
+                placeholderTextColor={C.slate400}
+              />
+
+              <Text style={s.metaText}>
+                {t("ageYearsDisplay").replace("{age}", String(age))}
+              </Text>
+              {age < adminSettings.underageLimit && (
+                <View style={[s.underageBadge, { alignSelf: "flex-start", marginTop: 8 }]}>
+                  <Text style={s.underageText}>{t("underageProfileBadge")}</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={s.card}>
+              <Text style={s.profileLabel}>{t("profileGuardianLabel")}</Text>
+              {boundGuardian ? (
+                <>
+                  <Text style={[s.profileValue, { marginTop: 8 }]}>{boundGuardian.name}</Text>
+                  <Text style={s.metaText}>{boundGuardian.email}</Text>
+                </>
+              ) : (
+                <Text style={[s.hintText, { marginTop: 8 }]}>{t("profileNotLinked")}</Text>
+              )}
+            </View>
+
+            <View style={s.joinTeamBox}>
+              <Text style={s.joinTeamTitle}>{t("profileJoinedTeamsLabel")}</Text>
+              {joinedTeams.length === 0 ? (
+                <Text style={[s.hintText, { marginTop: 8 }]}>
+                  {t("profileNoJoinedTeams")}
+                </Text>
+              ) : (
+                <View style={s.joinedTeamsList}>
+                  {joinedTeams.map((group) => {
+                    const coach = users.find((u) => u.id === group.coachId);
+                    return (
+                      <View key={group.id} style={s.joinedTeamRow}>
+                        <Text style={s.joinedTeamName}>{group.name}</Text>
+                        <Text style={s.joinedTeamCoach}>
+                          {t("coachRole")}: {coach?.name ?? "-"}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              <Text style={[s.joinTeamTitle, { marginTop: 16 }]}>
+                {t("joinTeamTitle")}
+              </Text>
+              <Text style={s.joinTeamHint}>{t("joinTeamHint")}</Text>
+              <View style={[s.searchRow, { marginTop: 8, marginBottom: 8 }]}>
+                <TextInput
+                  style={s.searchInput}
+                  value={joinInviteCode}
+                  onChangeText={setJoinInviteCode}
+                  placeholder={t("joinTeamCodePlaceholder")}
+                  placeholderTextColor={C.slate400}
+                  autoCapitalize="characters"
+                />
+              </View>
+              <TouchableOpacity
+                style={[s.btn, joiningTeam && s.btnDisabled]}
+                onPress={handleJoinTeamByInvite}
+                disabled={joiningTeam}
+              >
+                <Text style={s.btnText}>
+                  {joiningTeam ? t("loading") : t("joinTeamBtn")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[s.btn, profileSaving && s.btnDisabled]}
+              onPress={handleSaveProfile}
+              disabled={profileSaving}
+            >
+              <Text style={s.btnText}>{profileSaving ? t("loading") : t("saveChangesBtn")}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.btn, { backgroundColor: C.red }]}
+              onPress={handleDeleteAccount}
+            >
+              <Text style={s.btnText}>{t("deleteAccountBtn")}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -859,6 +991,16 @@ const s = StyleSheet.create({
     fontWeight: "600",
     color: C.slate800,
     marginTop: 2,
+  },
+  profileInput: {
+    borderWidth: 1,
+    borderColor: C.slate300,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 13,
+    color: C.slate800,
+    backgroundColor: C.white,
+    marginTop: 6,
   },
   underageBadge: {
     backgroundColor: "#fefce8",
