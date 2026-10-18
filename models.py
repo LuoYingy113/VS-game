@@ -1,11 +1,17 @@
+import hashlib
 import os
 
 from dotenv import load_dotenv
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Float, Integer, String, Boolean, ForeignKey, JSON
 from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import validates
 from database import Base
 
 load_dotenv()
+
+def hash_text(value) -> str:
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
 
 class User(Base):
     __tablename__ = "users"
@@ -21,12 +27,18 @@ class User(Base):
     bio = Column(String, nullable=True)
     sport = Column(String, nullable=True)
     status = Column(String, nullable=True, default='active')
-    password = Column(String, nullable=True, default=os.getenv("DEFAULT_USER_PASSWORD", "change_me_please"))
+    password = Column(String, nullable=True, default=hash_text(os.getenv("DEFAULT_USER_PASSWORD", "change_me_please")))
     default_location = Column(String, nullable=True)
+    default_location_lng = Column(Float, nullable=True)
+    default_location_lat = Column(Float, nullable=True)
     default_club_id = Column(String, nullable=True)
     games_played_count = Column(Integer, nullable=False, default=0)
     verification_token = Column(String, nullable=True)
     jersey_number = Column(String, nullable=True)
+
+    @validates("password")
+    def _hash_password(self, key, value):
+        return hash_text(value) if value is not None else None
 
     @property
     def name(self) -> str:
@@ -50,6 +62,8 @@ class Game(Base):
     sport = Column(String)
     time = Column(String)
     location = Column(String)
+    location_lng = Column(Float, nullable=True)
+    location_lat = Column(Float, nullable=True)
     age_group = Column(String)
     gender = Column(String, nullable=True)  # 'male' | 'female' | 'mixed'
     deadline = Column(String, nullable=True)
@@ -142,6 +156,8 @@ class Club(Base):
     coach_id = Column(String, ForeignKey("users.id"))
     name = Column(String)
     default_location = Column(String, nullable=True)
+    default_location_lng = Column(Float, nullable=True)
+    default_location_lat = Column(Float, nullable=True)
 
 class CoachInviteCode(Base):
     __tablename__ = "coach_invite_codes"
@@ -182,4 +198,4 @@ class GameOccurrenceConfirmation(Base):
     game_id = Column(String, ForeignKey("games.id"), index=True)
     coach_id = Column(String, ForeignKey("users.id"), index=True)
     confirmed = Column(Boolean, default=False)
-    updated_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)

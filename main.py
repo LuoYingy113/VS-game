@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect as sa_inspect
 from database import engine, Base, get_db, SessionLocal
 import models
+from geocoding import geocode_lng_lat, reconcile_coords
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -17,6 +18,8 @@ from contextlib import asynccontextmanager
 import os
 import threading
 import smtplib
+import subprocess
+import tempfile
 from email.message import EmailMessage
 from urllib.parse import quote
 
@@ -144,6 +147,7 @@ def normalize_verification_code(raw: Optional[str]) -> str:
     return raw.translate(trans).replace(" ", "").strip()
 
 def save_email_code(db: Session, email: str, code: str, expires_ts: float) -> None:
+    code = models.hash_text(code)
     _email_codes[email] = (code, expires_ts)
     try:
         db.execute(
@@ -187,7 +191,7 @@ def is_email_code_valid(db: Session, email: str, submitted_code: Optional[str]) 
     if not entry:
         return False
     stored_code, expires_ts = entry
-    return expires_ts >= _time.time() and stored_code == normalize_verification_code(submitted_code)
+    return expires_ts >= _time.time() and stored_code == models.hash_text(normalize_verification_code(submitted_code))
 
 def parse_user_roles(raw_role: Optional[str]) -> list[str]:
     roles: list[str] = []
@@ -806,7 +810,7 @@ def run_migrations():
             if 'status' not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN status VARCHAR DEFAULT 'active'"))
             if 'password' not in user_cols:
-                conn.execute(text("ALTER TABLE users ADD COLUMN password VARCHAR DEFAULT 'password123'"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN password VARCHAR DEFAULT '" + models.hash_text('password123') + "'"))
             if 'first_name' not in user_cols:
                 conn.execute(text("ALTER TABLE users ADD COLUMN first_name VARCHAR"))
             if 'last_name' not in user_cols:
@@ -823,6 +827,10 @@ def run_migrations():
             user_cols2 = {c['name'] for c in insp.get_columns('users')}
             if 'default_location' not in user_cols2:
                 conn.execute(text("ALTER TABLE users ADD COLUMN default_location VARCHAR"))
+            if 'default_location_lng' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN default_location_lng DOUBLE PRECISION"))
+            if 'default_location_lat' not in user_cols2:
+                conn.execute(text("ALTER TABLE users ADD COLUMN default_location_lat DOUBLE PRECISION"))
             if 'default_club_id' not in user_cols2:
                 conn.execute(text("ALTER TABLE users ADD COLUMN default_club_id VARCHAR"))
             if 'games_played_count' not in user_cols2:
@@ -867,6 +875,16 @@ def run_migrations():
             club_cols = {c['name'] for c in insp.get_columns('clubs')}
             if 'default_location' not in club_cols:
                 conn.execute(text("ALTER TABLE clubs ADD COLUMN default_location VARCHAR"))
+            if 'default_location_lng' not in club_cols:
+                conn.execute(text("ALTER TABLE clubs ADD COLUMN default_location_lng DOUBLE PRECISION"))
+            if 'default_location_lat' not in club_cols:
+                conn.execute(text("ALTER TABLE clubs ADD COLUMN default_location_lat DOUBLE PRECISION"))
+        if 'games' in existing_tables:
+            game_cols_geo = {c['name'] for c in insp.get_columns('games')}
+            if 'location_lng' not in game_cols_geo:
+                conn.execute(text("ALTER TABLE games ADD COLUMN location_lng DOUBLE PRECISION"))
+            if 'location_lat' not in game_cols_geo:
+                conn.execute(text("ALTER TABLE games ADD COLUMN location_lat DOUBLE PRECISION"))
         # notifications table is created automatically by SQLAlchemy metadata
 
 def seed_database(db: Session):
@@ -911,6 +929,16 @@ def seed_database(db: Session):
 
 run_migrations()
 Base.metadata.create_all(bind=engine)
+
+def hash_existing_passwords():
+    with engine.begin() as conn:
+        rows = conn.execute(text("SELECT id, password FROM users WHERE password IS NOT NULL")).fetchall()
+        for uid, pwd in rows:
+            if not re.fullmatch(r"[0-9a-f]{64}", pwd):
+                conn.execute(text("UPDATE users SET password = :p WHERE id = :id"),
+                             {"p": models.hash_text(pwd), "id": uid})
+
+hash_existing_passwords()
 _startup_db = SessionLocal()
 seed_database(_startup_db)
 _startup_db.close()
@@ -1187,7 +1215,7 @@ class LoginRequest(BaseModel):
 @app.post("/api/login", response_model=UserResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email.ilike(body.email.strip())).first()
-    if not user or user.password != body.password:
+    if not user or user.password != models.hash_text(body.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.status == 'pending':
         raise HTTPException(status_code=403, detail="EMAIL_NOT_VERIFIED")
@@ -1658,7 +1686,7 @@ def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
     if is_underage:
         existing_guardian = db.query(models.User).filter(models.User.email == guardian_email).first()
         if existing_guardian:
-            if existing_guardian.password != body.guardianPassword:
+            if existing_guardian.password != models.hash_text(body.guardianPassword):
                 raise HTTPException(status_code=400, detail="监护人邮箱已存在，请输入该账号当前密码以完成关联 / Guardian email already exists; enter the existing account password to link it")
             if not has_user_role(existing_guardian, 'guardian'):
                 existing_guardian.role = append_user_role(existing_guardian.role, 'guardian')
@@ -1789,6 +1817,7 @@ def update_coach_profile(user_id: str, data: CoachProfileUpdate, db: Session = D
         user.jersey_number = data.jerseyNumber.strip() or None
     if data.defaultLocation is not None:
         user.default_location = data.defaultLocation.strip() or None
+        user.default_location_lng, user.default_location_lat = geocode_lng_lat(user.default_location)
     if data.defaultClubId is not None:
         user.default_club_id = data.defaultClubId or None
     if data.sport is not None:
@@ -2158,6 +2187,92 @@ def get_all_games(db: Session = Depends(get_db)):
         (models.Game.is_private == False) | (models.Game.is_private == None)
     ).all()
 
+_SCORER_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scorer.java")
+_SCORER_BUILD_DIR = os.path.join(tempfile.gettempdir(), "team_matcher_scorer")
+
+def _ensure_scorer_compiled() -> None:
+    class_file = os.path.join(_SCORER_BUILD_DIR, "scorer.class")
+    if os.path.exists(class_file) and os.path.getmtime(class_file) >= os.path.getmtime(_SCORER_SRC):
+        return
+    os.makedirs(_SCORER_BUILD_DIR, exist_ok=True)
+    subprocess.run(["javac", "-d", _SCORER_BUILD_DIR, _SCORER_SRC], check=True, capture_output=True, timeout=60)
+
+def run_java_scorer(rows: list) -> list[tuple[float, float]]:
+    """rows: (lat1, lon1, lat2, lon2, blacklisted, liked, age_diff). Returns (score, distance_km) per row via scorer.java."""
+    if not rows:
+        return []
+    _ensure_scorer_compiled()
+    payload = "\n".join(
+        f"{a} {b} {c} {d} {str(bl).lower()} {str(lk).lower()} {age}" for a, b, c, d, bl, lk, age in rows
+    )
+    out = subprocess.run(
+        ["java", "-cp", _SCORER_BUILD_DIR, "scorer", "--batch"],
+        input=payload, capture_output=True, text=True, check=True, timeout=30,
+    ).stdout
+    values = [float(x) for x in out.split()]
+    return list(zip(values[0::2], values[1::2]))
+
+def _age_level(token: str) -> Optional[int]:
+    m = re.fullmatch(r"[Uu](\d+)", token.strip())
+    return int(m.group(1)) if m else None
+
+def age_group_diff(coach_ages: list[str], game_ages: list[str]) -> int:
+    """Smallest age-level gap between any coach team age and any game age group."""
+    if not coach_ages or not game_ages:
+        return 0
+    best = 99
+    for a in coach_ages:
+        for g in game_ages:
+            la, lg = _age_level(a), _age_level(g)
+            if la is not None and lg is not None:
+                best = min(best, abs(la - lg))
+            elif la is None and lg is None and a.lower() == g.lower():
+                best = 0
+    return best
+
+@app.get("/api/games/scores")
+def get_game_scores(coachId: str, db: Session = Depends(get_db)):
+    """Match score (from scorer.java) of every public game for this coach, keyed by game id."""
+    coach = db.query(models.User).filter(models.User.id == coachId).first()
+    if not coach:
+        raise HTTPException(status_code=404, detail="Coach not found")
+    coach_ages = [
+        a for tg in db.query(models.TeamGroup).filter(models.TeamGroup.coach_id == coachId).all()
+        for a in parse_age_groups(tg.age_group)
+    ]
+    games = db.query(models.Game).filter(
+        ((models.Game.is_private == False) | (models.Game.is_private == None))
+        & (models.Game.creator_id != coachId)
+    ).all()
+    rows = []
+    has_real_coords = []
+    for g in games:
+        pts = (coach.default_location_lng, coach.default_location_lat, g.location_lng, g.location_lat)
+        # (0, 0) is a leftover placeholder, not a real location
+        has_real_coords.append(
+            None not in pts
+            and (pts[0], pts[1]) != (0, 0)
+            and (pts[2], pts[3]) != (0, 0)
+        )
+        coach_pt, game_pt = reconcile_coords(
+            (coach.default_location_lng, coach.default_location_lat),
+            (g.location_lng, g.location_lat),
+        )
+        rows.append((
+            coach_pt[1], coach_pt[0], game_pt[1], game_pt[0],
+            False, False, age_group_diff(coach_ages, parse_age_groups(g.age_group)),
+        ))
+    try:
+        scores = run_java_scorer(rows)
+    except Exception as exc:
+        print(f"[scorer] java scoring failed: {exc}", flush=True)
+        raise HTTPException(status_code=503, detail="Scoring unavailable")
+    # Distance is only meaningful when both sides were actually geocoded
+    return {
+        g.id: {"score": score, "distanceKm": distance if real else None}
+        for g, (score, distance), real in zip(games, scores, has_real_coords)
+    }
+
 @app.get("/api/games/by_invite/{code}", response_model=GameResponse)
 def get_game_by_invite(code: str, db: Session = Depends(get_db)):
     game = db.query(models.Game).filter(
@@ -2188,12 +2303,15 @@ def get_coach_past_games(coachId: str, db: Session = Depends(get_db)):
 
 @app.post("/api/games", response_model=GameResponse, status_code=201)
 def create_game(game: GameCreate, db: Session = Depends(get_db)):
+    loc_lng, loc_lat = geocode_lng_lat(game.location)
     new_game = models.Game(
         id=f"g_{uuid.uuid4().hex[:8]}",
         creator_id=game.creatorId,
         sport=game.sport,
         time=game.time,
         location=game.location,
+        location_lng=loc_lng,
+        location_lat=loc_lat,
         age_group=game.ageGroup,
         gender=game.gender,
         deadline=game.deadline,
@@ -2221,6 +2339,7 @@ def update_game(game_id: str, game_data: GameUpdate, db: Session = Depends(get_d
         game.time = game_data.time
     if game_data.location is not None:
         game.location = game_data.location
+        game.location_lng, game.location_lat = geocode_lng_lat(game.location)
     if game_data.ageGroup is not None:
         game.age_group = game_data.ageGroup
     if game_data.gender is not None:
@@ -2504,11 +2623,14 @@ def get_clubs(coachId: Optional[str] = None, db: Session = Depends(get_db)):
 
 @app.post("/api/clubs", response_model=ClubResponse, status_code=201)
 def create_club(club: ClubCreate, db: Session = Depends(get_db)):
+    club_lng, club_lat = geocode_lng_lat(club.defaultLocation)
     new_club = models.Club(
         id=f"cl_{uuid.uuid4().hex[:8]}",
         coach_id=club.coachId,
         name=club.name.strip(),
         default_location=club.defaultLocation.strip() if club.defaultLocation else None,
+        default_location_lng=club_lng,
+        default_location_lat=club_lat,
     )
     db.add(new_club)
     db.commit()
@@ -2524,6 +2646,7 @@ def update_club(club_id: str, club: ClubUpdate, db: Session = Depends(get_db)):
         record.name = club.name.strip() or record.name
     if club.defaultLocation is not None:
         record.default_location = club.defaultLocation.strip() or None
+        record.default_location_lng, record.default_location_lat = geocode_lng_lat(record.default_location)
     db.commit()
     db.refresh(record)
     return record

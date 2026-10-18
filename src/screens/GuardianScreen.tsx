@@ -20,6 +20,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, mapGame, mapUser } from "../api";
 import { C, NavBtn } from "../components/shared";
+import { backgroundStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
 import { clearLoggedInUserId, notifI18n, sendAppNotification } from "../storage";
 import { Club, Game, RosterEntry, TeamGroup, User } from "../types";
@@ -259,7 +260,7 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
       onRequestClose={() => setGuardianProfileOpen(false)}
     >
       <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: C.slate50 }}
+        style={backgroundStyles.screen}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <View
@@ -285,7 +286,7 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
             style={{
               fontSize: 18,
               fontWeight: "700",
-              color: C.slate800,
+              color: theme.text,
               flex: 1,
             }}
           >
@@ -673,18 +674,18 @@ export default function GuardianScreen({ state }: { state: GuardianState }) {
 const s = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 100 },
   hero: {
-    backgroundColor: C.purple,
+    backgroundColor: theme.accent,
     borderRadius: 20,
     padding: 24,
     marginBottom: 20,
     overflow: "hidden",
     position: "relative",
-    shadowColor: C.purple,
+    shadowColor: theme.accent,
     shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 6,
   },
-  heroTitle: { fontSize: 24, fontWeight: "bold", color: C.white },
+  heroTitle: { fontSize: 24, fontWeight: "bold", color: theme.buttonText },
   heroSubtitle: { fontSize: 13, color: "#e9d5ff", marginTop: 4 },
   heroShield: {
     position: "absolute",
@@ -696,7 +697,7 @@ const s = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 12,
   },
   emptyBox: {
@@ -709,7 +710,7 @@ const s = StyleSheet.create({
   },
   emptyText: { fontSize: 13, color: C.slate400 },
   approvalCard: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
@@ -731,7 +732,7 @@ const s = StyleSheet.create({
     marginRight: 10,
   },
   childAvatarText: { fontSize: 16, fontWeight: "bold", color: C.purple },
-  childName: { fontSize: 15, fontWeight: "bold", color: C.slate800 },
+  childName: { fontSize: 15, fontWeight: "bold", color: theme.text },
   gameInfoBox: {
     backgroundColor: C.slate50,
     borderRadius: 10,
@@ -742,21 +743,21 @@ const s = StyleSheet.create({
   infoRow: { fontSize: 13, color: C.slate700 },
   infoLbl: { fontWeight: "700" },
   approveBtn: {
-    backgroundColor: C.purple,
+    backgroundColor: theme.accent,
     borderRadius: 12,
     paddingVertical: 14,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    shadowColor: C.purple,
+    shadowColor: theme.accent,
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 4,
   },
-  approveBtnText: { color: C.white, fontWeight: "bold", fontSize: 15 },
+  approveBtnText: { color: theme.buttonText, fontWeight: "bold", fontSize: 15 },
   card: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
@@ -773,7 +774,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     marginBottom: 6,
   },
-  cardTitle: { fontSize: 15, fontWeight: "bold", color: C.slate800 },
+  cardTitle: { fontSize: 15, fontWeight: "bold", color: theme.text },
   pill: {
     fontSize: 10,
     fontWeight: "bold",
@@ -790,18 +791,18 @@ const s = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     backgroundColor: C.white,
     marginTop: 6,
   },
   bindingBtn: {
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: "center",
     marginTop: 8,
   },
-  bindingBtnText: { color: C.white, fontWeight: "700", fontSize: 12 },
+  bindingBtnText: { color: theme.buttonText, fontWeight: "700", fontSize: 12 },
   bindResult: {
     marginTop: 8,
     backgroundColor: "#ecfdf5",
@@ -836,7 +837,7 @@ const s = StyleSheet.create({
   },
   selectorOptionActive: {
     backgroundColor: "#eff6ff",
-    borderColor: C.blue,
+    borderColor: theme.primary,
   },
   selectorText: {
     fontSize: 12,
@@ -863,20 +864,20 @@ const s = StyleSheet.create({
   },
   volunteerNames: { fontSize: 12, color: "#7c3aed" },
   volunteerBtn: {
-    backgroundColor: C.purple,
+    backgroundColor: theme.accent,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: "center",
-    shadowColor: C.purple,
+    shadowColor: theme.accent,
     shadowOpacity: 0.2,
     shadowRadius: 6,
     elevation: 3,
   },
   volunteerBtnCancel: { backgroundColor: "#fee2e2" },
-  volunteerBtnText: { color: C.white, fontWeight: "600", fontSize: 13 },
+  volunteerBtnText: { color: theme.buttonText, fontWeight: "600", fontSize: 13 },
   bottomNav: {
     flexDirection: "row",
-    backgroundColor: C.white,
+    backgroundColor: theme.bottomNavBg,
     borderTopWidth: 1,
     borderColor: C.slate200,
     paddingTop: 8,

@@ -16,6 +16,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { theme } from "../constants/commonStyles";
 
 import { getCoachPlayerNotes, loadAllData } from "../api";
 import {
@@ -613,11 +614,11 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: C.slate50,
+    backgroundColor: theme.screenBg,
     paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
   },
   header: {
-    backgroundColor: C.white,
+    backgroundColor: theme.headerBg,
     borderBottomWidth: 1,
     borderColor: C.slate200,
     paddingHorizontal: 16,
@@ -631,7 +632,7 @@ const styles = StyleSheet.create({
     elevation: 2,
     zIndex: 10,
   },
-  headerName: { fontSize: 17, fontWeight: "bold", color: C.slate800 },
+  headerName: { fontSize: 17, fontWeight: "bold", color: theme.text },
     headerCountBadge: {
       backgroundColor: "#dbeafe",
       borderRadius: 999,
@@ -680,7 +681,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  notifBadgeText: { fontSize: 10, color: C.white, fontWeight: "bold" },
+  notifBadgeText: { fontSize: 10, color: theme.buttonText, fontWeight: "bold" },
   inboxPanel: {
     position: "absolute",
     top: 70,
@@ -705,7 +706,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: C.slate300,
   },
-  inboxTitle: { fontSize: 14, fontWeight: "bold", color: C.slate800 },
+  inboxTitle: { fontSize: 14, fontWeight: "bold", color: theme.text },
   inboxEmpty: {
     fontSize: 13,
     color: C.slate400,
@@ -713,7 +714,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   inboxItem: { padding: 12, borderBottomWidth: 1, borderColor: C.slate200 },
-  inboxItemTitle: { fontSize: 13, fontWeight: "600", color: C.slate800 },
+  inboxItemTitle: { fontSize: 13, fontWeight: "600", color: theme.text },
   inboxItemBody: { fontSize: 12, color: C.slate500, marginTop: 2 },
   inboxItemTime: { fontSize: 10, color: C.slate300, marginTop: 4 },
 });

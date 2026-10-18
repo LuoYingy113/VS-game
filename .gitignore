@@ -55,3 +55,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+# local data / notes (not for git)
+team_matcher_db_test.dump
+users.csv
+wa.txt

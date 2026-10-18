@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { API_BASE_URL, mapUser } from "../api";
 import { C, LangSwitcher } from "../components/shared";
+import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
 import { User } from "../types";
 
@@ -1272,7 +1273,7 @@ export default function LoginScreen({ onLogin }: Props) {
 }
 
 const styles = StyleSheet.create({
-  bg: { flex: 1, backgroundColor: C.slate50 },
+  bg: backgroundStyles.screen,
   container: {
     alignItems: "center",
     padding: 24,
@@ -1281,7 +1282,7 @@ const styles = StyleSheet.create({
   logoBox: {
     width: 72,
     height: 72,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
@@ -1296,7 +1297,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 6,
   },
   subtitle: {
@@ -1327,7 +1328,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   tabText: { fontSize: 13, fontWeight: "600", color: C.slate500 },
-  tabTextActive: { color: C.slate800 },
+  tabTextActive: { color: theme.text },
   form: { width: "100%" },
   label: {
     fontSize: 13,
@@ -1342,7 +1343,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 13,
     fontSize: 14,
-    color: C.slate800,
+    color: theme.text,
     backgroundColor: C.white,
     marginBottom: 4,
   },
@@ -1360,29 +1361,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#fecaca",
   },
-  primaryBtn: {
-    width: "100%",
-    paddingVertical: 15,
-    backgroundColor: C.blue,
-    borderRadius: 14,
-    alignItems: "center",
-    marginTop: 12,
-    shadowColor: C.blue,
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
+  primaryBtn: buttonStyles.primaryBtn,
   disabledBtn: { opacity: 0.6 },
-  primaryBtnText: { color: C.white, fontWeight: "700", fontSize: 15 },
+  primaryBtnText: buttonStyles.primaryBtnText,
   sendCodeBtn: {
     alignSelf: "flex-start",
     paddingVertical: 8,
     paddingHorizontal: 16,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 10,
     marginTop: 8,
   },
-  sendCodeBtnText: { color: C.white, fontWeight: "600", fontSize: 13 },
+  sendCodeBtnText: { color: theme.buttonText, fontWeight: "600", fontSize: 13 },
   demoBox: {
     marginTop: 20,
     backgroundColor: C.slate100,
@@ -1411,8 +1401,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: C.white,
   },
-  roleBtnBlue: { backgroundColor: C.blue },
-  roleBtnPurple: { backgroundColor: C.purple },
+  roleBtnBlue: { backgroundColor: theme.primary },
+  roleBtnPurple: { backgroundColor: theme.accent },
   roleBtnGreen: { backgroundColor: C.green },
   roleBtnText: { fontSize: 13, fontWeight: "600", color: C.slate500 },
   codeInput: {

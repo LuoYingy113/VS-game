@@ -497,6 +497,9 @@ const translations = {
       "Manage your clubs here. You can assign a club when creating a team.",
 
     // Discover / create game
+    smartSearchBtn: "Smart search",
+    viewOnGoogleMaps: "View on Google Maps",
+    locationInputHint: "Tip: copy the address or place name from Google Maps.",
     discoverSearchPh: "Search teams, coaches, time, sport, gender\u2026",
     createMatchDescPh:
       "Description, rules, time requirements, indoor/outdoor\u2026",
@@ -968,6 +971,9 @@ const translations = {
     manageClubsDesc: "在这里管理您的俱乐部，创建队伍时可以选择所属俱乐部。",
 
     // Discover / create game
+    smartSearchBtn: "智能搜索",
+    viewOnGoogleMaps: "在谷歌地图中查看",
+    locationInputHint: "推荐从谷歌地图复制地址或地点名输入",
     discoverSearchPh: "搜索球队、教练、时间、球类、性别…",
     createMatchDescPh: "比赛说明、规则、时间要求、室内/室外…",
     noMatchesFound: "暂无符合条件的比赛",
@@ -1474,6 +1480,9 @@ const translations = {
       "Διαχειριστείτε τους συλλόγους σας εδώ. Μπορείτε να εκχωρήσετε σύλλογο κατά τη δημιουργία ομάδας.",
 
     // Discover / create game
+    smartSearchBtn: "Έξυπνη αναζήτηση",
+    viewOnGoogleMaps: "Προβολή στο Google Maps",
+    locationInputHint: "Συμβουλή: αντιγράψτε τη διεύθυνση ή το όνομα του μέρους από το Google Maps.",
     discoverSearchPh: "Αναζήτηση ομάδας, προπονητή, ώρα, άθλημα, γένος…",
     createMatchDescPh: "Περιγραφή, κανόνες, ωράριο, εσωτερικό/εξωτερικό…",
     noMatchesFound: "Δεν βρέθηκαν αγώνες",

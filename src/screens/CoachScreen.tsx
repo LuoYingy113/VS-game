@@ -33,6 +33,7 @@ import {
   Linking,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -53,6 +54,7 @@ import {
 } from "../api";
 import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
 import { AppModal, C, DatePickerField, NavBtn } from "../components/shared";
+import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
 import {
   clearLoggedInUserId,
@@ -353,7 +355,7 @@ function CoachProfileScreen({
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: C.slate50 }}
+        style={backgroundStyles.screen}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <View
@@ -381,7 +383,7 @@ function CoachProfileScreen({
             style={{
               fontSize: 18,
               fontWeight: "700",
-              color: C.slate800,
+              color: theme.text,
               flex: 1,
             }}
           >
@@ -477,7 +479,9 @@ function CoachProfileScreen({
                 value={location}
                 onChangeText={setLocation}
               />
+              <MapLinkButton address={location} />
             </View>
+            <LocationHint />
           </View>
           {/* Sport multi-select */}
           <View>
@@ -768,6 +772,29 @@ export default function CoachScreen({ state }: { state: CoachState }) {
   const [expandedDiscoverId, setExpandedDiscoverId] = useState<string | null>(
     null,
   );
+  const [smartSearch, setSmartSearch] = useState(false);
+  const [gameScores, setGameScores] = useState<
+    Record<string, { score: number; distanceKm: number | null }>
+  >({});
+
+  // Scores come from the backend (scorer.java) only when smart search is on
+  React.useEffect(() => {
+    if (tab !== "discover" || !smartSearch) {
+      setGameScores({});
+      return;
+    }
+    let cancelled = false;
+    apiFetch(`/games/scores?coachId=${encodeURIComponent(currentUser.id)}`)
+      .then((data) => {
+        if (!cancelled) setGameScores(data || {});
+      })
+      .catch(() => {
+        if (!cancelled) setGameScores({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, smartSearch, games.length]);
 
   // Reset sport filter + auto-select age/gender from coach's teams every time discover tab opens
   React.useEffect(() => {
@@ -1086,7 +1113,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
           <Text style={s.hintText}>{t("coachGenCodeHint")}</Text>
           {!code ? (
             <TouchableOpacity
-              style={[s.btn, { backgroundColor: C.purple }]}
+              style={[s.btn, { backgroundColor: theme.accent }]}
               onPress={generate}
               disabled={loading}
             >
@@ -1278,7 +1305,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                         <Text
                           style={[
                             s.filterChipText,
-                            resultValue === "win" && { color: C.white },
+                            resultValue === "win" && { color: theme.buttonText },
                           ]}
                         >
                           {t("coachHistoryResultWin")}
@@ -1307,7 +1334,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                         <Text
                           style={[
                             s.filterChipText,
-                            resultValue === "lose" && { color: C.white },
+                            resultValue === "lose" && { color: theme.buttonText },
                           ]}
                         >
                           {t("coachHistoryResultLose")}
@@ -1771,6 +1798,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
             onChangeText={setLocation}
             placeholder="City Stadium"
             error={submitted && !location}
+            mapLink
           />
           {/* Age group collapsible picker */}
           <View>
@@ -2072,7 +2100,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               >
                 <View style={s.rowBetween}>
                   <Text
-                    style={{ fontWeight: "600", color: C.slate800, fontSize: 14 }}
+                    style={{ fontWeight: "600", color: theme.text, fontSize: 14 }}
                   >
                     🏆 {club.name}
                   </Text>
@@ -3409,6 +3437,20 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                 clearButtonMode="while-editing"
               />
             </View>
+            <TouchableOpacity
+              style={[
+                s.filterChip,
+                { alignSelf: "flex-start", marginBottom: 8 },
+                smartSearch && s.filterChipActive,
+              ]}
+              onPress={() => setSmartSearch((v) => !v)}
+            >
+              <Text
+                style={[s.filterChipText, smartSearch && s.filterChipTextActive]}
+              >
+                ✨ {t("smartSearchBtn")}
+              </Text>
+            </TouchableOpacity>
             {/* ---- Private game invite-code lookup ---- */}
             <View
               style={[
@@ -3692,7 +3734,14 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                     })(),
                 )
                 .slice()
-                .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+                .sort(
+                  (a, b) =>
+                    (smartSearch
+                      ? (gameScores[b.id]?.score ?? 0) -
+                        (gameScores[a.id]?.score ?? 0)
+                      : 0) ||
+                    new Date(a.time).getTime() - new Date(b.time).getTime(),
+                )
                 .map((game) => {
                   const creator = users.find((u) => u.id === game.creatorId);
                   const homeGroup = teamGroups.find(
@@ -3763,6 +3812,9 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                         >
                           <Text style={[s.metaRow, { color: C.blue }]}>
                             📍 {game.location}
+                            {smartSearch &&
+                              gameScores[game.id]?.distanceKm != null &&
+                              `  ·  ${gameScores[game.id].distanceKm!.toFixed(1)} km`}
                           </Text>
                         </TouchableOpacity>
                       </TouchableOpacity>
@@ -4191,7 +4243,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                           fullName={player?.name ?? ""}
                                           textStyle={{
                                             fontWeight: "600",
-                                            color: C.slate800,
+                                            color: theme.text,
                                             fontSize: 13,
                                           }}
                                           numberOfLines={1}
@@ -4276,7 +4328,7 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                                         fullName={op.name}
                                         textStyle={{
                                           fontWeight: "600",
-                                          color: C.slate800,
+                                          color: theme.text,
                                           fontSize: 13,
                                         }}
                                         numberOfLines={1}
@@ -5289,6 +5341,7 @@ function GameManagementCard({
             onChangeText={setLocation}
             placeholder="City Stadium"
             error={submitted && !location}
+            mapLink
           />
           <View>
             <Text style={s.fieldLabel}>{t("ageGroupLabel")} *</Text>
@@ -5971,12 +6024,12 @@ function GameManagementCard({
                     top: 8,
                     paddingHorizontal: 8,
                     paddingVertical: 3,
-                    backgroundColor: C.blue,
+                    backgroundColor: theme.primary,
                     borderRadius: 5,
                     alignItems: "flex-start",
                   }}
                 >
-                  <Text style={{ fontSize: 11, color: C.white, fontWeight: "600" }}>
+                  <Text style={{ fontSize: 11, color: theme.buttonText, fontWeight: "600" }}>
                     {t("copy")}
                   </Text>
                 </TouchableOpacity>
@@ -6066,7 +6119,7 @@ function GameManagementCard({
                         >
                           <Text
                             style={{
-                              color: C.white,
+                              color: theme.buttonText,
                               fontSize: 12,
                               fontWeight: "600",
                             }}
@@ -6080,7 +6133,7 @@ function GameManagementCard({
                         >
                           <Text
                             style={{
-                              color: C.white,
+                              color: theme.buttonText,
                               fontSize: 12,
                               fontWeight: "600",
                             }}
@@ -6150,7 +6203,12 @@ function GameManagementCard({
                       (u) => u.id === p.playerId,
                     )?.jerseyNumber;
                     return (
-                      <View key={p.id} style={s.participationRow}>
+                      <Pressable
+                        key={p.id}
+                        style={s.participationRow}
+                        delayLongPress={1500}
+                        onLongPress={() => openEditPlayerNicknameModal(p.playerId, basePlayerName)}
+                      >
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <NameRevealText
                               displayText={
@@ -6178,14 +6236,6 @@ function GameManagementCard({
                           )}
                         </View>
                         <View style={s.participationActions}>
-                          <TouchableOpacity
-                            style={s.iconBtnSm}
-                            onPress={() =>
-                              openEditPlayerNicknameModal(p.playerId, basePlayerName)
-                            }
-                          >
-                            <Pencil size={13} color={C.slate600} />
-                          </TouchableOpacity>
                           {p.status === "pending_coach" && (
                             <TouchableOpacity
                               style={s.approveBtn}
@@ -6203,7 +6253,7 @@ function GameManagementCard({
                             <Text style={s.participationActionText}>Out</Text>
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </Pressable>
                     );
                   })}
 
@@ -6215,7 +6265,12 @@ function GameManagementCard({
                       p.name,
                     );
                     return (
-                      <View key={p.id} style={s.participationRow}>
+                      <Pressable
+                        key={p.id}
+                        style={s.participationRow}
+                        delayLongPress={1500}
+                        onLongPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                      >
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <NameRevealText
                             displayText={truncateOfflinePlayerName(playerName)}
@@ -6228,19 +6283,13 @@ function GameManagementCard({
                         </View>
                         <View style={s.participationActions}>
                           <TouchableOpacity
-                            style={s.iconBtnSm}
-                            onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
-                          >
-                            <Pencil size={13} color={C.slate600} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
                             style={[s.participationBtn, s.toNonParticipatingBtn]}
                             onPress={() => setOfflineStatus(p.id, "out")}
                           >
                             <Text style={s.participationActionText}>Out</Text>
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -6272,12 +6321,17 @@ function GameManagementCard({
                       (u) => u.id === p.playerId,
                     )?.jerseyNumber;
                     return (
-                      <View key={p.id} style={s.participationRow}>
+                      <Pressable
+                        key={p.id}
+                        style={s.participationRow}
+                        delayLongPress={1500}
+                        onLongPress={() => openEditPlayerNicknameModal(p.playerId, basePlayerName)}
+                      >
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <NameRevealText
                             displayText={playerName}
                             fullName={basePlayerName}
-                            textStyle={{ fontWeight: "600", color: C.slate800 }}
+                            textStyle={{ fontWeight: "600", color: theme.text }}
                           />
                           {!!playerJerseyNumber && (
                             <Text style={{ fontSize: 10, color: C.slate500 }}>
@@ -6287,21 +6341,13 @@ function GameManagementCard({
                         </View>
                         <View style={s.participationActions}>
                           <TouchableOpacity
-                            style={s.iconBtnSm}
-                            onPress={() =>
-                              openEditPlayerNicknameModal(p.playerId, basePlayerName)
-                            }
-                          >
-                            <Pencil size={13} color={C.slate600} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
                             style={[s.participationBtn, s.toNonParticipatingBtn]}
                             onPress={() => handleSetParticipation(p, "not_participating")}
                           >
                             <Text style={s.participationActionText}>Out</Text>
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </Pressable>
                     );
                   })}
 
@@ -6313,24 +6359,23 @@ function GameManagementCard({
                       p.name,
                     );
                     return (
-                      <View key={p.id} style={s.participationRow}>
+                      <Pressable
+                        key={p.id}
+                        style={s.participationRow}
+                        delayLongPress={1500}
+                        onLongPress={() => openEditPlayerNicknameModal(p.id, p.name)}
+                      >
                         <View style={{ flex: 1, minWidth: 0 }}>
                           <NameRevealText
                             displayText={truncateOfflinePlayerName(playerName)}
                             fullName={p.name}
-                            textStyle={{ fontWeight: "600", color: C.slate800 }}
+                            textStyle={{ fontWeight: "600", color: theme.text }}
                           />
                           <Text style={{ fontSize: 10, color: C.slate500 }}>
                             {t("offlineNoAccountLabel")}
                           </Text>
                         </View>
                         <View style={s.participationActions}>
-                          <TouchableOpacity
-                            style={s.iconBtnSm}
-                            onPress={() => openEditPlayerNicknameModal(p.id, p.name)}
-                          >
-                            <Pencil size={13} color={C.slate600} />
-                          </TouchableOpacity>
                           <TouchableOpacity
                             style={[s.participationBtn, s.toParticipatingBtn]}
                             onPress={() => setOfflineStatus(p.id, "participating")}
@@ -6344,7 +6389,7 @@ function GameManagementCard({
                             <Text style={s.participationActionText}>Out</Text>
                           </TouchableOpacity>
                         </View>
-                      </View>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -6356,6 +6401,32 @@ function GameManagementCard({
     </View>
   );
 }
+function MapLinkButton({ address }: { address: string }) {
+  const { t } = useLanguage();
+  const query = address.trim();
+  return (
+    <TouchableOpacity
+      style={[s.iconBtnSm, { opacity: query ? 1 : 0.4 }]}
+      disabled={!query}
+      accessibilityLabel={t("viewOnGoogleMaps")}
+      onPress={() =>
+        Linking.openURL(
+          `https://maps.google.com/?q=${encodeURIComponent(query)}`,
+        )
+      }
+    >
+      <MapPin size={15} color={C.blue} />
+    </TouchableOpacity>
+  );
+}
+
+function LocationHint() {
+  const { t } = useLanguage();
+  return (
+    <Text style={[s.hintText, { marginTop: 4 }]}>{t("locationInputHint")}</Text>
+  );
+}
+
 function FieldInput({
   label,
   value,
@@ -6363,6 +6434,7 @@ function FieldInput({
   placeholder,
   multiline = false,
   error = false,
+  mapLink = false,
 }: {
   label: string;
   value: string;
@@ -6370,21 +6442,36 @@ function FieldInput({
   placeholder?: string;
   multiline?: boolean;
   error?: boolean;
+  mapLink?: boolean;
 }) {
+  const input = (
+    <TextInput
+      style={[
+        s.input,
+        multiline && { height: 80, textAlignVertical: "top" },
+        error && s.inputError,
+        mapLink && { flex: 1 },
+      ]}
+      value={value}
+      onChangeText={onChangeText}
+      placeholder={placeholder}
+      placeholderTextColor={C.slate400}
+    />
+  );
   return (
     <View>
       <Text style={[s.label, error && { color: C.red }]}>{label}</Text>
-      <TextInput
-        style={[
-          s.input,
-          multiline && { height: 80, textAlignVertical: "top" },
-          error && s.inputError,
-        ]}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={C.slate400}
-      />
+      {mapLink ? (
+        <>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {input}
+            <MapLinkButton address={value} />
+          </View>
+          <LocationHint />
+        </>
+      ) : (
+        input
+      )}
     </View>
   );
 }
@@ -6403,11 +6490,11 @@ const s = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 16,
   },
   card: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 16,
     padding: 16,
     marginBottom: 14,
@@ -6427,7 +6514,7 @@ const s = StyleSheet.create({
   cardTitle: {
     fontSize: 16,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     flex: 1,
     flexShrink: 1,
   },
@@ -6523,7 +6610,7 @@ const s = StyleSheet.create({
     backgroundColor: C.white,
   },
   genderBtnActive: {
-    borderColor: C.blue,
+    borderColor: theme.primary,
     backgroundColor: "#eff6ff",
   },
   genderBtnText: { fontSize: 13, color: C.slate600 },
@@ -6538,7 +6625,7 @@ const s = StyleSheet.create({
     padding: 12,
     backgroundColor: C.white,
   },
-  dropdownValueText: { fontSize: 13, color: C.slate800 },
+  dropdownValueText: { fontSize: 13, color: theme.text },
   dropdownPlaceholder: { fontSize: 13, color: C.slate400 },
   dropdownList: {
     marginTop: 4,
@@ -6572,7 +6659,7 @@ const s = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     padding: 0,
   },
   filterChip: {
@@ -6584,18 +6671,18 @@ const s = StyleSheet.create({
     borderColor: C.slate200,
   },
   filterChipActive: {
-    backgroundColor: C.blue,
-    borderColor: C.blue,
+    backgroundColor: theme.primary,
+    borderColor: theme.primary,
   },
   filterChipText: { fontSize: 12, color: C.slate600, fontWeight: "500" },
-  filterChipTextActive: { color: C.white },
+  filterChipTextActive: { color: theme.buttonText },
   input: {
     borderWidth: 1,
     borderColor: C.slate300,
     borderRadius: 12,
     padding: 12,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     backgroundColor: C.white,
   },
   inputError: {
@@ -6606,21 +6693,12 @@ const s = StyleSheet.create({
     borderColor: C.red,
     backgroundColor: "#fff5f5",
   },
-  btn: {
-    backgroundColor: C.blue,
-    borderRadius: 12,
-    paddingVertical: 13,
-    alignItems: "center",
-    shadowColor: C.blue,
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  btnDisabled: { backgroundColor: C.slate200, shadowOpacity: 0 },
-  btnText: { color: C.white, fontWeight: "700", fontSize: 14 },
+  btn: buttonStyles.btn,
+  btnDisabled: buttonStyles.btnDisabled,
+  btnText: buttonStyles.btnText,
   bottomNav: {
     flexDirection: "row",
-    backgroundColor: C.white,
+    backgroundColor: theme.bottomNavBg,
     borderTopWidth: 1,
     borderColor: C.slate200,
     paddingTop: 8,
@@ -6629,33 +6707,10 @@ const s = StyleSheet.create({
     shadowRadius: 8,
     elevation: 10,
   },
-  iconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "#dbeafe",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconBtnSm: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    backgroundColor: C.slate50,
-    borderWidth: 1,
-    borderColor: C.slate200,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tagBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: C.slate100,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  tagBtnText: { fontSize: 12, fontWeight: "600", color: C.slate700 },
+  iconBtn: buttonStyles.iconBtn,
+  iconBtnSm: buttonStyles.iconBtnSm,
+  tagBtn: buttonStyles.tagBtn,
+  tagBtnText: buttonStyles.tagBtnText,
   emptyBox: {
     borderWidth: 1,
     borderColor: C.slate300,
@@ -6702,7 +6757,7 @@ const s = StyleSheet.create({
     justifyContent: "center",
   },
   subText: { fontSize: 11, color: C.slate500 },
-  boldLg: { fontSize: 17, fontWeight: "bold", color: C.slate800 },
+  boldLg: { fontSize: 17, fontWeight: "bold", color: theme.text },
   linkRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -6720,7 +6775,7 @@ const s = StyleSheet.create({
   codeLarge: {
     fontSize: 28,
     fontWeight: "bold",
-    color: C.white,
+    color: theme.buttonText,
     letterSpacing: 4,
     fontFamily:
       Platform.select({ ios: "Courier", android: "monospace" }) ?? "monospace",
@@ -6753,7 +6808,7 @@ const s = StyleSheet.create({
     color: C.slate600,
   },
   occurrenceBannerCard: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderWidth: 1,
     borderColor: "#fecdd3",
     borderRadius: 12,
@@ -6762,7 +6817,7 @@ const s = StyleSheet.create({
   occurrenceBannerGameTitle: {
     fontSize: 13,
     fontWeight: "700",
-    color: C.slate800,
+    color: theme.text,
   },
   pendingRow: {
     flexDirection: "row",
@@ -6860,7 +6915,7 @@ const s = StyleSheet.create({
     backgroundColor: "#0044ff",
   },
   participationActionText: {
-    color: C.white,
+    color: theme.buttonText,
     fontSize: 11,
     fontWeight: "600",
   },
@@ -6876,7 +6931,7 @@ const s = StyleSheet.create({
     borderColor: C.slate200,
   },
   approveBtn: {
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 8,
@@ -6913,7 +6968,7 @@ const s = StyleSheet.create({
     borderColor: C.slate200,
     backgroundColor: C.slate50,
   },
-  groupSelectActive: { borderColor: C.blue, backgroundColor: C.blueLight },
+  groupSelectActive: { borderColor: theme.primary, backgroundColor: C.blueLight },
   dateBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -6924,7 +6979,7 @@ const s = StyleSheet.create({
     padding: 12,
     backgroundColor: C.white,
   },
-  dateBtnText: { fontSize: 13, color: C.slate800, fontWeight: "500" },
+  dateBtnText: { fontSize: 13, color: theme.text, fontWeight: "500" },
   calendarActionRow: {
     marginTop: 8,
     borderWidth: 1,
@@ -6947,7 +7002,7 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -6958,7 +7013,7 @@ const s = StyleSheet.create({
     zIndex: 20,
   },
   historyFloatingBtnText: {
-    color: C.white,
+    color: theme.buttonText,
     fontWeight: "700",
     fontSize: 13,
   },
@@ -6973,7 +7028,7 @@ const s = StyleSheet.create({
   historyTitle: {
     fontSize: 14,
     fontWeight: "700",
-    color: C.slate800,
+    color: theme.text,
   },
   nameTooltip: {
     position: "absolute",
@@ -6992,7 +7047,7 @@ const s = StyleSheet.create({
   },
   nameTooltipText: {
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     fontWeight: "600",
   },
 });

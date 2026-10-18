@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, calculateAge, mapTeamGroup, mapUser } from "../api";
 import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
 import { AppModal, C, NavBtn } from "../components/shared";
+import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
 import { clearLoggedInUserId, notifI18n, sendAppNotification } from "../storage";
 import {
@@ -718,7 +719,7 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
         onRequestClose={() => setPlayerProfileOpen(false)}
       >
         <KeyboardAvoidingView
-          style={{ flex: 1, backgroundColor: C.slate50 }}
+          style={backgroundStyles.screen}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           <View
@@ -744,7 +745,7 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
               style={{
                 fontSize: 18,
                 fontWeight: "700",
-                color: C.slate800,
+                color: theme.text,
                 flex: 1,
               }}
             >
@@ -916,7 +917,7 @@ const s = StyleSheet.create({
   joinTeamTitle: {
     fontSize: 14,
     fontWeight: "700",
-    color: C.slate800,
+    color: theme.text,
   },
   joinTeamHint: {
     fontSize: 12,
@@ -956,7 +957,7 @@ const s = StyleSheet.create({
   joinedTeamName: {
     fontSize: 13,
     fontWeight: "700",
-    color: C.slate800,
+    color: theme.text,
   },
   joinedTeamCoach: {
     marginTop: 2,
@@ -977,7 +978,7 @@ const s = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     padding: 0,
   },
   profileLabel: {
@@ -989,7 +990,7 @@ const s = StyleSheet.create({
   profileValue: {
     fontSize: 14,
     fontWeight: "600",
-    color: C.slate800,
+    color: theme.text,
     marginTop: 2,
   },
   profileInput: {
@@ -998,7 +999,7 @@ const s = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     backgroundColor: C.white,
     marginTop: 6,
   },
@@ -1012,11 +1013,11 @@ const s = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 16,
   },
   card: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
@@ -1028,7 +1029,7 @@ const s = StyleSheet.create({
     elevation: 1,
   },
   inviteCard: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 14,
     padding: 16,
     marginBottom: 12,
@@ -1047,12 +1048,12 @@ const s = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 4,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
   },
   cardTitle: {
     fontSize: 16,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 4,
   },
   metaText: { fontSize: 13, color: C.slate600, marginTop: 2 },
@@ -1078,25 +1079,16 @@ const s = StyleSheet.create({
     borderRadius: 20,
     overflow: "hidden",
   },
-  btn: {
-    backgroundColor: C.blue,
-    borderRadius: 12,
-    paddingVertical: 13,
-    alignItems: "center",
-    shadowColor: C.blue,
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  btnDisabled: { backgroundColor: C.slate300, shadowOpacity: 0, elevation: 0 },
-  btnText: { color: C.white, fontWeight: "700", fontSize: 14 },
+  btn: buttonStyles.btn,
+  btnDisabled: buttonStyles.btnDisabledAlt,
+  btnText: buttonStyles.btnText,
   textarea: {
     borderWidth: 1,
     borderColor: C.slate300,
     borderRadius: 12,
     padding: 12,
     fontSize: 13,
-    color: C.slate800,
+    color: theme.text,
     backgroundColor: C.white,
     height: 96,
   },
@@ -1111,7 +1103,7 @@ const s = StyleSheet.create({
   emptyText: { fontSize: 13, color: C.slate400, textAlign: "center" },
   bottomNav: {
     flexDirection: "row",
-    backgroundColor: C.white,
+    backgroundColor: theme.bottomNavBg,
     borderTopWidth: 1,
     borderColor: C.slate200,
     paddingTop: 8,

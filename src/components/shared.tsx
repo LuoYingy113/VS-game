@@ -18,6 +18,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { theme } from "../constants/commonStyles";
 import { Lang, useLanguage } from "../i18n";
 import { ModalConfig } from "../types";
 
@@ -26,30 +27,8 @@ const welcomeImage = require("../../welcome.png");
 // ==========================================
 // 颜色常量 (defined first — used by all components below)
 // ==========================================
-export const C = {
-  blue: "#2563eb",
-  blueLight: "#eff6ff",
-  green: "#16a34a",
-  greenLight: "#f0fdf4",
-  red: "#dc2626",
-  redLight: "#fef2f2",
-  purple: "#7c3aed",
-  purpleLight: "#f5f3ff",
-  orange: "#ea580c",
-  orangeLight: "#fff7ed",
-  yellow: "#ca8a04",
-  yellowLight: "#fefce8",
-  slate800: "#1e293b",
-  slate700: "#334155",
-  slate600: "#475569",
-  slate500: "#64748b",
-  slate400: "#94a3b8",
-  slate300: "#cbd5e1",
-  slate200: "#e2e8f0",
-  slate100: "#f1f5f9",
-  slate50: "#f8fafc",
-  white: "#ffffff",
-};
+import { C } from "../constants/palette";
+export { C };
 
 // ==========================================
 // 底部导航按钮 (Bottom Tab Button)
@@ -618,22 +597,22 @@ const dpStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     borderWidth: 1.5,
-    borderColor: C.blue,
+    borderColor: theme.primary,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 10,
     backgroundColor: "#eff6ff",
     marginBottom: 4,
   },
-  displayText: { fontSize: 14, color: C.slate800, fontWeight: "500", flex: 1 },
+  displayText: { fontSize: 14, color: theme.text, fontWeight: "500", flex: 1 },
   changeBtn: {
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     marginLeft: 8,
   },
-  changeBtnText: { fontSize: 12, color: C.white, fontWeight: "600" },
+  changeBtnText: { fontSize: 12, color: theme.buttonText, fontWeight: "600" },
 });
 
 const calStyles = StyleSheet.create({
@@ -660,7 +639,7 @@ const calStyles = StyleSheet.create({
   title: {
     fontSize: 17,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     textAlign: "center",
     marginBottom: 16,
   },
@@ -670,7 +649,7 @@ const calStyles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 12,
   },
-  monthText: { fontSize: 15, fontWeight: "600", color: C.slate800 },
+  monthText: { fontSize: 15, fontWeight: "600", color: theme.text },
   navBtn: { padding: 6 },
   weekRow: { flexDirection: "row", marginBottom: 6 },
   weekDay: {
@@ -688,11 +667,11 @@ const calStyles = StyleSheet.create({
     justifyContent: "center",
     padding: 2,
   },
-  cellSelected: { backgroundColor: C.blue, borderRadius: 100 },
-  cellToday: { borderRadius: 100, borderWidth: 2, borderColor: C.blue },
+  cellSelected: { backgroundColor: theme.primary, borderRadius: 100 },
+  cellToday: { borderRadius: 100, borderWidth: 2, borderColor: theme.primary },
   cellDisabled: { opacity: 0.25 },
-  cellText: { fontSize: 14, color: C.slate800 },
-  cellTextSelected: { color: C.white, fontWeight: "bold" },
+  cellText: { fontSize: 14, color: theme.text },
+  cellTextSelected: { color: theme.buttonText, fontWeight: "bold" },
   cellTextDisabled: { color: C.slate400 },
   cellTextToday: { color: C.blue, fontWeight: "bold" },
   timeRow: {
@@ -716,7 +695,7 @@ const calStyles = StyleSheet.create({
     backgroundColor: C.white,
     fontSize: 28,
     fontWeight: "600",
-    color: C.slate800,
+    color: theme.text,
     textAlign: "center",
   },
   timePill: {
@@ -727,9 +706,9 @@ const calStyles = StyleSheet.create({
     borderColor: C.slate200,
     backgroundColor: C.white,
   },
-  timePillSel: { backgroundColor: C.blue, borderColor: C.blue },
+  timePillSel: { backgroundColor: theme.primary, borderColor: theme.primary },
   timePillText: { fontSize: 13, color: C.slate700 },
-  timePillTextSel: { color: C.white, fontWeight: "600" },
+  timePillTextSel: { color: theme.buttonText, fontWeight: "600" },
   actions: { flexDirection: "row", gap: 10, marginTop: 20 },
   cancelBtn: {
     flex: 1,
@@ -744,10 +723,10 @@ const calStyles = StyleSheet.create({
     flex: 2,
     paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     alignItems: "center",
   },
-  confirmText: { fontSize: 15, color: C.white, fontWeight: "600" },
+  confirmText: { fontSize: 15, color: theme.buttonText, fontWeight: "600" },
 });
 
 const styles = StyleSheet.create({
@@ -831,7 +810,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     flex: 1,
   },
   modalClose: {
@@ -852,14 +831,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   welcomeBanner: {
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 999,
     paddingHorizontal: 18,
     paddingVertical: 8,
     marginBottom: 18,
   },
   welcomeBannerText: {
-    color: C.white,
+    color: theme.buttonText,
     fontSize: 16,
     fontWeight: "700",
     letterSpacing: 0.3,
@@ -867,7 +846,7 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 20,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 8,
     textAlign: "center",
   },
@@ -896,12 +875,12 @@ const styles = StyleSheet.create({
   retryBtn: {
     width: "100%",
     paddingVertical: 14,
-    backgroundColor: C.blue,
+    backgroundColor: theme.primary,
     borderRadius: 14,
     alignItems: "center",
   },
   retryBtnText: {
-    color: C.white,
+    color: theme.buttonText,
     fontWeight: "600",
     fontSize: 15,
   },

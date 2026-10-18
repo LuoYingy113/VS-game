@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { apiFetch } from "../api";
 import { AppModal, C } from "../components/shared";
+import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
 import { AdminSettings, ModalConfig, User } from "../types";
 
@@ -72,7 +73,7 @@ export default function AdminScreen({ state }: { state: AdminState }) {
           <Text style={s.hintText}>{t("adminGenerateCodeHint")}</Text>
           {!code ? (
             <TouchableOpacity
-              style={[s.btn, { backgroundColor: C.purple }]}
+              style={[s.btn, { backgroundColor: theme.accent }]}
               onPress={generate}
               disabled={loading}
             >
@@ -138,7 +139,7 @@ export default function AdminScreen({ state }: { state: AdminState }) {
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: C.slate50 }}
+      style={backgroundStyles.screen}
       contentContainerStyle={s.container}
     >
       {/* Header */}
@@ -215,10 +216,10 @@ const s = StyleSheet.create({
     shadowRadius: 10,
     elevation: 5,
   },
-  headerTitle: { fontSize: 20, fontWeight: "bold", color: C.white },
+  headerTitle: { fontSize: 20, fontWeight: "bold", color: theme.buttonText },
   headerSubtitle: { fontSize: 13, color: "#94a3b8", marginTop: 4 },
   card: {
-    backgroundColor: C.white,
+    backgroundColor: theme.cardBg,
     borderRadius: 16,
     padding: 18,
     marginBottom: 16,
@@ -232,7 +233,7 @@ const s = StyleSheet.create({
   cardTitle: {
     fontSize: 16,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
     marginBottom: 4,
   },
   desc: { fontSize: 13, color: C.slate500, lineHeight: 18 },
@@ -245,7 +246,7 @@ const s = StyleSheet.create({
     textAlign: "center",
     fontSize: 18,
     fontWeight: "bold",
-    color: C.slate800,
+    color: theme.text,
   },
   saveBtn: {
     backgroundColor: C.slate800,
@@ -256,21 +257,10 @@ const s = StyleSheet.create({
     justifyContent: "center",
     minWidth: 80,
   },
-  saveBtnText: { color: C.white, fontWeight: "600", fontSize: 14 },
+  saveBtnText: { color: theme.buttonText, fontWeight: "600", fontSize: 14 },
   hintText: { fontSize: 12, color: C.slate400, marginTop: 8, lineHeight: 17 },
-  btn: {
-    backgroundColor: C.purple,
-    borderRadius: 12,
-    paddingVertical: 13,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: C.purple,
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  btnText: { color: C.white, fontWeight: "700", fontSize: 14 },
+  btn: buttonStyles.btnAdmin,
+  btnText: buttonStyles.btnText,
   codeBg: {
     backgroundColor: C.slate800,
     borderRadius: 16,
@@ -281,7 +271,7 @@ const s = StyleSheet.create({
   codeValue: {
     fontSize: 28,
     fontWeight: "bold",
-    color: C.white,
+    color: theme.buttonText,
     letterSpacing: 4,
   },
 });
