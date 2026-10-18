@@ -63,7 +63,7 @@ Recommended reading order:
 
 ## Architecture diagram：
 <p align="center">
-  <img src="b.jpeg" alt="项目横幅" width="350" />
-  <img src="function.jpeg" alt="项目横幅" width="350" />
+  <img src="b2.jpeg" alt="项目横幅" width="350" />
+  <img src="function2.jpeg" alt="项目横幅" width="350" />
   
 </p>
