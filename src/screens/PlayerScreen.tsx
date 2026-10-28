@@ -106,7 +106,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
   const [profileJerseyNumber, setProfileJerseyNumber] = useState(
     currentUser.jerseyNumber ?? "",
   );
-  const [profileDob, setProfileDob] = useState(currentUser.dob ?? "");
   const [profileSaving, setProfileSaving] = useState(false);
 
   useEffect(() => {
@@ -116,7 +115,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     setProfileEmail(currentUser.email || "");
     setProfilePhone(currentUser.phone ?? "");
     setProfileJerseyNumber(currentUser.jerseyNumber ?? "");
-    setProfileDob(currentUser.dob ?? "");
   }, [
     playerProfileOpen,
     currentUser.firstName,
@@ -124,7 +122,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
     currentUser.email,
     currentUser.phone,
     currentUser.jerseyNumber,
-    currentUser.dob,
   ]);
 
   const handleJoinTeamByInvite = async () => {
@@ -390,7 +387,6 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
           email: nextEmail,
           phone: profilePhone.trim() || null,
           jerseyNumber: profileJerseyNumber.trim() || null,
-          dob: profileDob.trim() || null,
         },
       });
       setCurrentUser(mapUser(data));
@@ -809,13 +805,9 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
               />
 
               <Text style={[s.metaText, { marginTop: 10 }]}>{t("labelDob")}</Text>
-              <TextInput
-                style={s.profileInput}
-                value={profileDob}
-                onChangeText={setProfileDob}
-                placeholder={t("profileDobPlaceholder")}
-                placeholderTextColor={C.slate400}
-              />
+              <Text style={[s.profileValue, { marginTop: 6 }]}>
+                {currentUser.dob || t("profileDobPlaceholder")}
+              </Text>
 
               <Text style={s.metaText}>
                 {t("ageYearsDisplay").replace("{age}", String(age))}

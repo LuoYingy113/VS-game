@@ -1671,7 +1671,13 @@ def register_player(body: PlayerRegisterRequest, db: Session = Depends(get_db)):
     is_underage = age is not None and age < underage_limit
     if is_underage:
         if not body.guardianName or not body.guardianEmail or not body.guardianPassword:
-            raise HTTPException(status_code=400, detail=f"未满{underage_limit}岁的球员注册时必须同时注册监护人账号 / Players under {underage_limit} must register a guardian account")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "guardian_required",
+                    "message": f"未满{underage_limit}岁的球员注册时必须同时注册监护人账号 / Players under {underage_limit} must register a guardian account",
+                },
+            )
         guardian_email = body.guardianEmail.strip().lower()
         if not is_email_code_valid(db, guardian_email, body.guardianEmailCode):
             raise HTTPException(status_code=400, detail="监护人邮箱验证码无效或已过期 / Guardian email verification code is invalid or expired")
@@ -3063,4 +3069,3 @@ def mark_all_notifications_read(user_id: str, db: Session = Depends(get_db)):
 @app.get("/")
 def read_root():
     return {"message": "Team Matcher API is running. Visit /docs for Swagger UI."}
-

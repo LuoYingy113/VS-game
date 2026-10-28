@@ -9,7 +9,7 @@
     "scheme": "teammatcherapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.xiexueyan.teammatcherapp",
       "buildNumber": "8",
       "infoPlist": {

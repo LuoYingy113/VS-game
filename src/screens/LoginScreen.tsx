@@ -27,22 +27,6 @@ interface Props {
 
 const INVALID_PWD = /[ <>'"]/;
 
-function calcAge(dob: string): number | null {
-  if (!dob || dob.length < 10) return null;
-  const [y, m, d] = dob.substring(0, 10).split("-").map(Number);
-  if (!y || !m || !d) return null;
-  const today = new Date();
-  let age = today.getFullYear() - y;
-  if (
-    today.getMonth() + 1 < m ||
-    (today.getMonth() + 1 === m && today.getDate() < d)
-  )
-    age--;
-  return age;
-}
-
-const UNDERAGE_LIMIT = 16;
-
 function normalizeEmailCode(v: string): string {
   return v
     .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 65248))
@@ -146,13 +130,13 @@ export default function LoginScreen({ onLogin }: Props) {
   const [sendingGuardianCode, setSendingGuardianCode] = useState(false);
   const [guardianCodeSent, setGuardianCodeSent] = useState(false);
   const [guardianCodeError, setGuardianCodeError] = useState("");
+  const [guardianRequired, setGuardianRequired] = useState(false);
+  const [guardianRequiredMessage, setGuardianRequiredMessage] = useState("");
 
   // Extra reg fields
   const [regPhone, setRegPhone] = useState("");
   const [regClubName, setRegClubName] = useState("");
 
-  const playerAge = regRole === "player" ? calcAge(regDob) : null;
-  const needsGuardian = playerAge !== null && playerAge < UNDERAGE_LIMIT;
   const [keyboardInset, setKeyboardInset] = useState(0);
 
   useEffect(() => {
@@ -329,15 +313,13 @@ export default function LoginScreen({ onLogin }: Props) {
       setRegError(t("errPwdMismatch"));
       return;
     }
-    if (needsGuardian) {
+    if (guardianRequired) {
       if (
         !guardianName.trim() ||
         !guardianEmail.trim() ||
         !guardianPassword.trim()
       ) {
-        setRegError(
-          t("errGuardianRequired").replace("{limit}", String(UNDERAGE_LIMIT)),
-        );
+        setRegError(guardianRequiredMessage || t("errFillAll"));
         return;
       }
       if (INVALID_PWD.test(guardianPassword)) {
@@ -392,7 +374,7 @@ export default function LoginScreen({ onLogin }: Props) {
               emailCode: normalizeEmailCode(emailCode),
               dob: regDob || null,
               phone: regPhone.trim() || null,
-              ...(needsGuardian
+              ...(guardianRequired
                 ? {
                     guardianName: guardianName.trim(),
                     guardianEmail: guardianEmail.trim(),
@@ -409,7 +391,21 @@ export default function LoginScreen({ onLogin }: Props) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setRegError(data.detail || t("errRegFailed"));
+        const detail = data.detail;
+        if (
+          regRole === "player" &&
+          detail &&
+          typeof detail === "object" &&
+          detail.code === "guardian_required"
+        ) {
+          setGuardianRequired(true);
+          setGuardianRequiredMessage(detail.message || "");
+        }
+        setRegError(
+          typeof detail === "string"
+            ? detail
+            : detail?.message || t("errRegFailed"),
+        );
         return;
       }
       const userData = await res.json();
@@ -856,6 +852,8 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianEmailCode("");
                   setGuardianCodeSent(false);
                   setGuardianCodeError("");
+                  setGuardianRequired(false);
+                  setGuardianRequiredMessage("");
                   setEmailCode("");
                   setCodeSent(false);
                   setCodeError("");
@@ -885,6 +883,8 @@ export default function LoginScreen({ onLogin }: Props) {
                   setGuardianEmailCode("");
                   setGuardianCodeSent(false);
                   setGuardianCodeError("");
+                  setGuardianRequired(false);
+                  setGuardianRequiredMessage("");
                   setEmailCode("");
                   setCodeSent(false);
                   setCodeError("");
@@ -1043,13 +1043,14 @@ export default function LoginScreen({ onLogin }: Props) {
                 <Text style={[styles.label, { marginTop: 12 }]}>
                   {t("labelDob")} *
                 </Text>
-                <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
+                <View style={{ gap: 8, marginBottom: 4 }}>
                   <TextInput
-                    style={[styles.input, { flex: 2 }]}
+                    style={styles.input}
                     value={dobYear}
                     onChangeText={(v) => {
                       const s = v.replace(/\D/g, "").slice(0, 4);
                       setDobYear(s);
+                      setGuardianRequired(false);
                       updateDob(s, dobMonth, dobDay);
                     }}
                     keyboardType="number-pad"
@@ -1058,11 +1059,12 @@ export default function LoginScreen({ onLogin }: Props) {
                     placeholderTextColor={C.slate400}
                   />
                   <TextInput
-                    style={[styles.input, { flex: 1 }]}
+                    style={styles.input}
                     value={dobMonth}
                     onChangeText={(v) => {
                       const s = v.replace(/\D/g, "").slice(0, 2);
                       setDobMonth(s);
+                      setGuardianRequired(false);
                       updateDob(dobYear, s, dobDay);
                     }}
                     keyboardType="number-pad"
@@ -1071,11 +1073,12 @@ export default function LoginScreen({ onLogin }: Props) {
                     placeholderTextColor={C.slate400}
                   />
                   <TextInput
-                    style={[styles.input, { flex: 1 }]}
+                    style={styles.input}
                     value={dobDay}
                     onChangeText={(v) => {
                       const s = v.replace(/\D/g, "").slice(0, 2);
                       setDobDay(s);
+                      setGuardianRequired(false);
                       updateDob(dobYear, dobMonth, s);
                     }}
                     keyboardType="number-pad"
@@ -1086,24 +1089,8 @@ export default function LoginScreen({ onLogin }: Props) {
                 </View>
               </>
             )}
-            {regRole !== "guardian" && playerAge !== null && (
-              <Text
-                style={[
-                  styles.hint,
-                  { color: needsGuardian ? "#f59e0b" : C.slate400 },
-                ]}
-              >
-                {needsGuardian
-                  ? t("underageWarning").replace(
-                      "{limit}",
-                      String(UNDERAGE_LIMIT),
-                    )
-                  : t("ageDisplay").replace("{age}", String(playerAge))}
-              </Text>
-            )}
-
             {/* Guardian section — shown for underage players */}
-            {needsGuardian && regRole === "player" && (
+            {guardianRequired && regRole === "player" && (
               <View style={styles.guardianBox}>
                 <Text style={styles.guardianTitle}>
                   {t("guardianAccountTitle")}
