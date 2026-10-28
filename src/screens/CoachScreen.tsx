@@ -52,7 +52,8 @@ import {
   mapTeamGroup,
   saveCoachPlayerNote,
 } from "../api";
-import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
+import { addMatchToSystemCalendar } from "../calendar";
+import { CalendarAddError } from "../calendarTypes";
 import { AppModal, C, DatePickerField, NavBtn } from "../components/shared";
 import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
@@ -4897,7 +4898,9 @@ function GameManagementCard({
         location: game.location,
         notes: game.description || game.contactPhone || undefined,
       });
-      showToast(`${t("calendarAdded")} (${result.calendarTitle})`);
+      showToast(result.kind === "download"
+        ? t("calendarDownloaded")
+        : `${t("calendarAdded")} (${result.calendarTitle})`);
     } catch (err) {
       if (err instanceof CalendarAddError) {
         if (err.code === "permission_denied") {

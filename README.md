@@ -1,73 +1,69 @@
-# Welcome to your Expo app 👋
+# Team Matcher Code Docs
 
-VS-game: sports team and match management app.
+## App Overview
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Team Matcher is a cross-platform sports team management app built with Expo + React Native (frontend) and FastAPI + SQLAlchemy (backend).
 
-## Get started
+Core roles and use cases:
 
-1. Install dependencies
+- Coach: create clubs/groups, manage players, publish matches, and process match applications.
+- Player: join groups, receive and manage match invitations, and maintain profile details.
+- Guardian: review and approve underage player participation.
+- Admin: manage platform-level settings and oversight workflows.
 
-   ```bash
-   npm install
-   ```
+Core capabilities:
 
-2. Start the app
+- Club -> Group -> Player team organization.
+- Invite-code based group join and offline player binding.
+- Match creation, applying, confirmation, and roster workflows.
+- Email verification and password reset flows.
+- In-app notifications for key team and match events.
 
-   ```bash
-   npx expo start
-   ```
+## Project Structure
 
-3. Configure environment variables (shared by frontend and backend)
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   Required keys in `.env`:
-
-   - `EXPO_PUBLIC_API_BASE_URL` (frontend API base, include `/api`)
-   - `APP_BASE_URL` (backend public base URL for email links)
-   - `SMTP_HOST`, `SMTP_PORT`, `SENDER_EMAIL`, `SENDER_NAME`, `GMAIL_APP_PASSWORD`
-   - `CORS_ALLOW_ORIGINS` (comma-separated, or `*`)
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```text
+team-matcher-app/
+├── src/
+│   ├── api.ts                     # Frontend API wrapper + DTO mapping
+│   ├── i18n.tsx                   # Multi-language dictionary and language hooks
+│   ├── storage.ts                 # Local persistence + app notification helpers
+│   ├── app/                       # Expo Router entry screens
+│   ├── screens/                   # Role-based screens (Coach/Player/Guardian/Admin/Login)
+│   ├── components/                # Shared UI components
+│   ├── hooks/                     # Theme/color-scheme hooks
+│   ├── constants/                 # Theme constants
+|   ├── screens/
+|   |   ├── AdminScreen.tsx
+|   |   ├── CoachScreen.tsx
+|   |   ├── GuardianScreen.tsx
+|   |   ├── LoginScreen.tsx
+|   |   ├── PlayerScreen.tsx
+│   └── types.ts                   # Frontend domain types
+├── assets/                        # App icons and static assets
+├── docs/                          # This documentation set
+├── scripts/                       # Utility scripts (e.g., reset-project)
+├── main.py                        # FastAPI backend (monolithic route/modules)
+├── app.json                       # Expo runtime/build configuration
+├── package.json                   # Frontend dependencies and npm scripts
+├── .env.example                   # Environment variable template
+└── README.md                      # Root quick-start and environment notes
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+This folder contains module-oriented documentation for the current codebase.
 
-### Other setup steps
+- `frontend-modules.md`: frontend architecture, state flow, screens, and shared utilities.
+- `backend-main-modules.md`: modular explanation of the monolithic `main.py` backend.
+- `new-machine-setup.md`: environment setup checklist for moving the project to a new macOS computer.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Recommended reading order:
 
-## Learn more
+1. `frontend-modules.md`
+2. `backend-main-modules.md`
+3. `new-machine-setup.md`
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
-# VS-game
-# VS-game
+## Architecture diagram：
+<p align="center">
+  <img src="b.jpeg" alt="项目横幅" width="350" />
+  <img src="function.jpeg" alt="项目横幅" width="350" />
+  
+</p>

@@ -19,7 +19,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, calculateAge, mapTeamGroup, mapUser } from "../api";
-import { addMatchToSystemCalendar, CalendarAddError } from "../calendar";
+import { addMatchToSystemCalendar } from "../calendar";
+import { CalendarAddError } from "../calendarTypes";
 import { AppModal, C, NavBtn } from "../components/shared";
 import { backgroundStyles, buttonStyles, theme } from "../constants/commonStyles";
 import { useLanguage } from "../i18n";
@@ -409,7 +410,9 @@ export default function PlayerScreen({ state }: { state: PlayerState }) {
         location: game.location,
         notes: game.description || game.contactPhone || undefined,
       });
-      showToast(`${t("calendarAdded")} (${result.calendarTitle})`);
+      showToast(result.kind === "download"
+        ? t("calendarDownloaded")
+        : `${t("calendarAdded")} (${result.calendarTitle})`);
     } catch (err) {
       if (err instanceof CalendarAddError) {
         if (err.code === "permission_denied") {

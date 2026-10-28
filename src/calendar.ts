@@ -1,26 +1,9 @@
 import * as ExpoCalendar from "expo-calendar";
 import { Platform } from "react-native";
+import { CalendarAddError, CalendarAddResult } from "./calendarTypes";
 
-type CalendarErrorCode =
-  | "permission_denied"
-  | "calendar_unavailable"
-  | "invalid_date"
-  | "event_not_found";
-
-export class CalendarAddError extends Error {
-  code: CalendarErrorCode;
-
-  constructor(code: CalendarErrorCode) {
-    super(code);
-    this.code = code;
-  }
-}
-
-export type CalendarAddResult = {
-  eventId: string;
-  calendarId: string;
-  calendarTitle: string;
-};
+export { CalendarAddError } from "./calendarTypes";
+export type { CalendarAddResult } from "./calendarTypes";
 
 function getCalendarTitle(calendar: ExpoCalendar.Calendar): string {
   const anyCalendar = calendar as any;
@@ -125,6 +108,7 @@ export async function addMatchToSystemCalendar(input: {
   }
 
   return {
+    kind: "system-calendar",
     eventId,
     calendarId: writableCalendar.id,
     calendarTitle: getCalendarTitle(writableCalendar),

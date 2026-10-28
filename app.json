@@ -32,7 +32,15 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "bundler": "metro",
+      "favicon": "./assets/images/favicon.png",
+      "name": "Team Matcher",
+      "shortName": "TeamMatch",
+      "display": "standalone",
+      "themeColor": "#208AEF",
+      "backgroundColor": "#FFFFFF",
+      "orientation": "portrait",
+      "startUrl": "/"
     },
     "plugins": [
       "expo-router",
