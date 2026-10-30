@@ -4,7 +4,7 @@ import { C } from "./palette";
 // Central place to tweak button and background styling across all screens.
 
 export const theme = {
-  screenBg: "#dcbbf1",
+  screenBg: "#a7e5ed",
   headerBg: C.white,
   bottomNavBg: C.white,
   cardBg: "#f4edb6",

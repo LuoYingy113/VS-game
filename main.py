@@ -457,9 +457,16 @@ def _cleanup_deleted_player(db: Session, user: models.User) -> None:
     db.query(models.CoachPlayerNote).filter(
         models.CoachPlayerNote.player_id == user.id
     ).delete(synchronize_session=False)
+    db.query(models.GuardianPlayerLinkRequest).filter(
+        models.GuardianPlayerLinkRequest.player_id == user.id
+    ).delete(synchronize_session=False)
 
 
 def _cleanup_deleted_guardian(db: Session, user: models.User) -> None:
+    db.query(models.GuardianPlayerLinkRequest).filter(
+        models.GuardianPlayerLinkRequest.guardian_id == user.id
+    ).delete(synchronize_session=False)
+
     child_ids = [
         child.id
         for child in db.query(models.User)
