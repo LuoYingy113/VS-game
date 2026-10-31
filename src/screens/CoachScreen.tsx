@@ -2131,16 +2131,16 @@ export default function CoachScreen({ state }: { state: CoachState }) {
               </View>
             ))
           )}
-          <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <View style={{  gap: 8, alignItems: "center" }}>
             <TextInput
-              style={[s.input, { flex: 1 }]}
+              style={[s.input]}
               placeholder={t("phClubName")}
               placeholderTextColor={C.slate400}
               value={clubName}
               onChangeText={setClubName}
             />
             <TextInput
-              style={[s.input, { flex: 1 }]}
+              style={[s.input]}
               placeholder={t("clubDefaultLocationPlaceholder")}
               placeholderTextColor={C.slate400}
               value={clubDefaultLocation}
@@ -4433,7 +4433,10 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                     style={[s.card, { paddingBottom: isExpanded ? 8 : 0 }]}
                   >
                     {/* Club header */}
-                    <View style={s.rowBetween}>
+                    <View style={{
+                      ...s.rowBetween,
+                      paddingBottom: isExpanded ? 12 : 15,
+                      }}>
                       <TouchableOpacity
                         style={{
                           flex: 1,
@@ -4473,7 +4476,10 @@ export default function CoachScreen({ state }: { state: CoachState }) {
                         )}
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={s.iconBtnSm}
+                        style={{
+                          ...s.iconBtnSm,
+                          alignItems: "center",
+                        }}
                         onPress={() => openAddGroupModal(section.clubId)}
                       >
                         <Plus size={14} color={C.slate700} />
